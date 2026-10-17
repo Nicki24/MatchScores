@@ -40,10 +40,16 @@ class BubbleService : Service() {
 
     companion object {
         const val ACTION_STOP = "mg.matchscores.app.STOP"
+        const val EXTRA_RESULT_CODE = "resultCode"
+        const val EXTRA_DATA = "data"
         private const val CHANNEL = "bubble"
 
         @Volatile
         var running = false
+            private set
+
+        @Volatile
+        var capturing = false
             private set
     }
 
@@ -55,13 +61,14 @@ class BubbleService : Service() {
     private var panelShown = false
     private var panelReady = false
     private var pending: ScreenReaderService.Capture? = null
+    private var screen: ScreenCapture? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        startInForeground()
+        startInForeground(false)
         if (!Settings.canDrawOverlays(this)) {
             Toast.makeText(this, "Autorise l'affichage par-dessus les autres applis", Toast.LENGTH_LONG).show()
             stopSelf()
@@ -76,11 +83,40 @@ class BubbleService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        val code = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
+        val data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
+            intent?.getParcelableExtra(EXTRA_DATA, Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent?.getParcelableExtra(EXTRA_DATA)
+        }
+        if (data != null && running) startCapture(code, data)
         return START_STICKY
+    }
+
+    /** Démarre la capture d'écran autorisée par l'utilisateur (accord « Commencer »). */
+    private fun startCapture(code: Int, data: Intent) {
+        try {
+            startInForeground(true) // Android exige ce type de service avant la capture
+            screen?.release()
+            screen = ScreenCapture(this, code, data) {
+                main.post {
+                    screen = null
+                    capturing = false
+                }
+            }
+            capturing = true
+        } catch (e: Exception) {
+            capturing = false
+            Toast.makeText(this, "Capture d'écran impossible : ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onDestroy() {
         running = false
+        capturing = false
+        screen?.release()
+        screen = null
         bubble?.let { safeRemove(it) }
         panel?.let {
             if (panelShown) safeRemove(it)
@@ -100,7 +136,7 @@ class BubbleService : Service() {
         }
     }
 
-    private fun startInForeground() {
+    private fun startInForeground(withCapture: Boolean) {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Bulle flottante", NotificationManager.IMPORTANCE_LOW))
         val stop = PendingIntent.getService(
@@ -117,10 +153,12 @@ class BubbleService : Service() {
             .addAction(Notification.Action.Builder(null as Icon?, "Arrêter", stop).build())
             .setOngoing(true)
             .build()
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(1, n)
+        val capture = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        when {
+            Build.VERSION.SDK_INT >= 34 ->
+                startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or (if (withCapture) capture else 0))
+            Build.VERSION.SDK_INT >= 29 && withCapture -> startForeground(1, n, capture)
+            else -> startForeground(1, n)
         }
     }
 
@@ -197,19 +235,42 @@ class BubbleService : Service() {
     }
 
     private fun analyze() {
+        // 1. Accessibilité (si activée) : lit aussi le texte hors de l'écran.
         val reader = ScreenReaderService.instance
-        if (reader == null) {
-            Toast.makeText(this, "Active « MatchScores — lecture des cotes » dans Accessibilité", Toast.LENGTH_LONG).show()
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val a11y = reader?.capture()
+        if (a11y != null && a11y.text.isNotBlank()) return deliver(a11y)
+
+        // 2. Capture d'écran + reconnaissance de texte (comme Hi Translate).
+        val cap = screen
+        if (cap == null) {
+            Toast.makeText(this, "Autorise la capture d'écran (bouton « Commencer »)", Toast.LENGTH_LONG).show()
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra(MainActivity.EXTRA_REQUEST_CAPTURE, true),
+            )
             return
         }
-        val capture = reader.capture()
-        if (capture == null || capture.text.isBlank()) {
-            Toast.makeText(this, "Aucun texte lisible sur cet écran", Toast.LENGTH_SHORT).show()
-            return
-        }
+        // On masque la bulle et le panneau le temps de la capture.
+        bubble?.alpha = 0f
+        hidePanel()
+        main.postDelayed({
+            cap.read { text ->
+                main.post {
+                    bubble?.alpha = 1f
+                    if (text.isNullOrBlank()) {
+                        Toast.makeText(this, "Aucun texte lu, réessaie dans une seconde", Toast.LENGTH_SHORT).show()
+                    } else {
+                        deliver(ScreenReaderService.Capture(text, "écran", text.count { it == '\n' } + 1))
+                    }
+                }
+            }
+        }, 350)
+    }
+
+    private fun deliver(c: ScreenReaderService.Capture) {
         showPanel()
-        if (panelReady) send(capture) else pending = capture
+        if (panelReady) send(c) else pending = c
     }
 
     private fun send(c: ScreenReaderService.Capture) {

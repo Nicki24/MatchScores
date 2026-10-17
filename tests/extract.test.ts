@@ -79,3 +79,10 @@ test("texte lu par l'appli Android : libellés 1 / X / 2 entre les cotes", () =>
   assert.equal(ms.length, 2);
   assert.deepEqual(ms[1].markets[0].selections.map((s) => s.odds), [1.3, 5.5, 9]);
 });
+
+test("texte OCR : équipe 1, cotes, équipe 2", () => {
+  const text = ["Football", "Premier League", "Arsenal", "1.85", "3.40", "4.20", "Chelsea", "Liverpool", "1.30 5.50 9.00", "Everton"].join("\n");
+  const ms = parseMatchesFromText(text);
+  assert.equal(ms.length, 2);
+  assert.deepEqual([ms[0].home, ms[0].away, ms[1].home, ms[1].away], ["Arsenal", "Chelsea", "Liverpool", "Everton"]);
+});

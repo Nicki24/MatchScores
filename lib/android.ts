@@ -9,6 +9,7 @@ export interface AndroidAppBridge {
   startBubble(): void;
   stopBubble(): void;
   openUrl(url: string): void;
+  requestCaptureAgain?(): void;
 }
 
 export interface AndroidPanelBridge {
@@ -21,6 +22,7 @@ export interface AndroidStatus {
   overlay: boolean;
   accessibility: boolean;
   bubble: boolean;
+  capture?: boolean;
   version: string;
 }
 

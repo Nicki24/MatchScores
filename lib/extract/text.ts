@@ -22,7 +22,29 @@ function splitTeams(line: string): [string, string] | undefined {
 const OUTCOME = /^(1|x|n|2|1x|x2|12)$/i;
 const TIME_RE = /\b(\d{1,2})[:h](\d{2})\b/;
 
+type Layout = "before" | "split";
+
+/**
+ * Deux mises en page possibles :
+ * - "before" : les deux équipes puis les cotes (texte copié, accessibilité) ;
+ * - "split"  : équipe 1, cotes, équipe 2 (lecture OCR ligne par ligne d'une carte de match).
+ * On essaie les deux et on garde celle qui reconnaît le plus de matchs.
+ */
 export function parseMatchesFromText(text: string, opts: { sport?: Sport; virtual?: boolean } = {}): Match[] {
+  const before = parseWithLayout(text, opts, "before");
+  const split = parseWithLayout(text, opts, "split");
+  // À égalité, un nom d'équipe orphelin après le dernier match trahit la mise en page "split".
+  const preferSplit =
+    split.matches.length > before.matches.length ||
+    (split.matches.length === before.matches.length && before.danglingName && !split.danglingName);
+  return (preferSplit ? split : before).matches;
+}
+
+function parseWithLayout(
+  text: string,
+  opts: { sport?: Sport; virtual?: boolean },
+  layout: Layout,
+): { matches: Match[]; danglingName: boolean } {
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.replace(/\t+/g, "  ").trim())
@@ -77,8 +99,16 @@ export function parseMatchesFromText(text: string, opts: { sport?: Sport; virtua
     let teams: [string, string] | undefined;
     const last = names[names.length - 1];
     if (last && splitTeams(last)) teams = splitTeams(last);
-    else if (names.length >= 2) teams = [names[names.length - 2], names[names.length - 1]];
-    if (names.length >= 3 && !teams?.[0].includes(" - ")) league = names[names.length - 3];
+    else if (layout === "split") {
+      // Équipe 2 juste après les cotes
+      const next = toks[j];
+      if (last && next && !next.odds && isNameLine(next.text) && !HEADINGS.test(next.text)) {
+        teams = [last, cleanName(next.text)];
+        i = j;
+      }
+    } else if (names.length >= 2) teams = [names[names.length - 2], names[names.length - 1]];
+    const leagueIdx = names.length - (layout === "split" ? 2 : 3);
+    if (leagueIdx >= 0 && names.length >= 2 && !teams?.[0].includes(" - ")) league = names[leagueIdx];
     if (!teams || run.length < 2) continue;
 
     const s = sport ?? detectSport(league) ?? "football";
@@ -92,7 +122,7 @@ export function parseMatchesFromText(text: string, opts: { sport?: Sport; virtua
     matches.push({ id: uid("t"), sport: s, league, home: teams[0], away: teams[1], startTime: time, virtual: opts.virtual, markets });
     names = [];
   }
-  return dedupeMatches(matches);
+  return { matches: dedupeMatches(matches), danglingName: matches.length > 0 && names.length > 0 };
 }
 
 /** Lignes de classement : "1 Arsenal 10 7 2 1 20 8 12 23 VVNDV" */

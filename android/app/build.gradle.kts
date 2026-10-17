@@ -46,3 +46,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+dependencies {
+    // Reconnaissance de texte embarquée (hors ligne) pour lire l'écran par capture.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+}

@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -20,9 +21,12 @@ class MainActivity : Activity() {
 
     companion object {
         const val EXTRA_RELOAD = "reload"
+        const val EXTRA_REQUEST_CAPTURE = "requestCapture"
+        private const val REQ_CAPTURE = 42
     }
 
     private lateinit var web: WebView
+    private var captureFromBubble = false
     private val appHost: String? by lazy { Uri.parse(BuildConfig.APP_URL).host }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -45,11 +49,41 @@ class MainActivity : Activity() {
         }
         setContentView(web)
         web.loadUrl(BuildConfig.APP_URL + if (savedInstanceState == null) "/connecter" else "/")
+        if (intent.getBooleanExtra(EXTRA_REQUEST_CAPTURE, false)) {
+            captureFromBubble = true
+            requestCapture()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(EXTRA_RELOAD, false)) web.loadUrl(BuildConfig.APP_URL + "/")
+        if (intent.getBooleanExtra(EXTRA_REQUEST_CAPTURE, false)) {
+            captureFromBubble = true
+            requestCapture()
+        }
+    }
+
+    /** Demande l'accord de capture d'écran (fenêtre Android « Commencer »). */
+    private fun requestCapture() {
+        val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        @Suppress("DEPRECATION")
+        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_CAPTURE) return
+        val service = Intent(this, BubbleService::class.java)
+        if (resultCode == RESULT_OK && data != null) {
+            service.putExtra(BubbleService.EXTRA_RESULT_CODE, resultCode).putExtra(BubbleService.EXTRA_DATA, data)
+        }
+        startForegroundService(service)
+        // Demandé depuis la bulle : on revient directement sur Bet261.
+        if (resultCode == RESULT_OK && captureFromBubble) moveTaskToBack(true)
+        captureFromBubble = false
     }
 
     @Deprecated("Deprecated in Java")
@@ -71,6 +105,7 @@ class MainActivity : Activity() {
             .put("overlay", Settings.canDrawOverlays(this@MainActivity))
             .put("accessibility", ScreenReaderService.instance != null)
             .put("bubble", BubbleService.running)
+            .put("capture", BubbleService.capturing)
             .put("version", BuildConfig.VERSION_NAME)
             .toString()
 
@@ -103,8 +138,14 @@ class MainActivity : Activity() {
                 if (Build.VERSION.SDK_INT >= 33) {
                     requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
                 }
-                startForegroundService(Intent(this@MainActivity, BubbleService::class.java))
+                // La bulle démarre après l'accord de capture d'écran (onActivityResult).
+                requestCapture()
             }
+        }
+
+        @JavascriptInterface
+        fun requestCaptureAgain() {
+            runOnUiThread { requestCapture() }
         }
 
         @JavascriptInterface
