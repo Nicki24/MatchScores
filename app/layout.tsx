@@ -10,6 +10,7 @@ const grotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-grotesk" }
 export const metadata: Metadata = {
   title: "MatchScores — Conseils de paris Bet261",
   description: "Analyse des cotes Bet261 (football, basket, tennis, virtuels) pour repérer les paris les moins risqués.",
+  appleWebApp: { capable: true, title: "MatchScores", statusBarStyle: "black-translucent" },
 };
 
 export const viewport: Viewport = { themeColor: "#060912", width: "device-width", initialScale: 1 };

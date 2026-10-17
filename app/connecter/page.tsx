@@ -22,6 +22,7 @@ import { useStore } from "@/lib/store";
 import { decodeSnapshot, isSnapshot, snapshotFromText } from "@/lib/snapshot";
 import type { Snapshot } from "@/lib/types";
 import { Button, Card } from "@/components/ui";
+import { InstallApp } from "@/components/InstallApp";
 
 const BET261 = "https://bet261.mg";
 
@@ -138,6 +139,8 @@ export default function ConnectPage() {
         </p>
       </section>
 
+      <InstallApp />
+
       <AnimatePresence>
         {toast && (
           <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
@@ -181,6 +184,10 @@ export default function ConnectPage() {
                     <b>Chrome Android</b> : ajoute n&apos;importe quelle page en favori, modifie-le, nomme-le
                     « matchscores » et remplace l&apos;URL par le code copié. Sur Bet261, tape « matchscores » dans la
                     barre d&apos;adresse et choisis le favori.
+                  </li>
+                  <li>
+                    <b>iPhone (Safari)</b> : ajoute cette page en signet, puis Signets → Modifier → remplace
+                    l&apos;adresse par le code copié. Sur Bet261, ouvre tes signets et touche « matchscores ».
                   </li>
                   <li>
                     <b>Extension Tampermonkey / Violentmonkey</b> : l&apos;assistant s&apos;affiche automatiquement sur

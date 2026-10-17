@@ -11,7 +11,7 @@ import { useHydrated } from "./useHydrated";
 const LINKS = [
   { href: "/", label: "Sports", icon: Gauge },
   { href: "/virtuels", label: "Virtuels", icon: Sparkles },
-  { href: "/connecter", label: "Connecter Bet261", icon: Plug },
+  { href: "/connecter", label: "Connecter Bet261", short: "Connecter", icon: Plug },
 ];
 
 const SOURCE: Record<string, string> = {
@@ -37,7 +37,7 @@ export function Nav() {
           <span className="hidden font-display text-lg font-bold tracking-tight sm:block">MatchScores</span>
         </Link>
         <nav className="no-scrollbar ml-auto flex gap-1 overflow-x-auto sm:ml-6">
-          {LINKS.map(({ href, label, icon: Icon }) => {
+          {LINKS.map(({ href, label, short, icon: Icon }) => {
             const active = href === "/" ? path === "/" : path.startsWith(href);
             return (
               <Link
@@ -47,7 +47,8 @@ export function Nav() {
               >
                 {active && <motion.span layoutId="nav-pill" className="absolute inset-0 rounded-xl bg-white/8" transition={{ type: "spring", duration: 0.45 }} />}
                 <Icon className="relative h-4 w-4" />
-                <span className="relative">{label}</span>
+                <span className="relative hidden sm:inline">{label}</span>
+                <span className="relative sm:hidden">{short ?? label}</span>
               </Link>
             );
           })}
