@@ -18,6 +18,8 @@ android {
         versionCode = ciVersionCode
         versionName = "1.0.$ciVersionCode"
         buildConfigField("String", "APP_URL", "\"$appUrl\"")
+        // Téléphones uniquement (ARM) : APK plus léger
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     // Clé partagée (dans le dépôt) : chaque nouvelle version s'installe par-dessus l'ancienne.
