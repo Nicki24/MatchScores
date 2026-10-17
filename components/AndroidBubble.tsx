@@ -1,0 +1,130 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { CheckCircle2, Circle, Download, Layers, Power, ShieldCheck } from "lucide-react";
+import { APK_URL, androidApp, androidStatus, type AndroidStatus } from "@/lib/android";
+import { Button, Card } from "./ui";
+
+function Check({ ok, children }: { ok: boolean; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-3">
+      {ok ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" /> : <Circle className="mt-0.5 h-5 w-5 shrink-0 text-slate-500" />}
+      <div className="flex-1 text-sm">{children}</div>
+    </div>
+  );
+}
+
+/** Bulle flottante : téléchargement de l'appli Android, ou réglages quand on est dans l'appli. */
+export function AndroidBubble() {
+  const [inApp, setInApp] = useState(false);
+  const [status, setStatus] = useState<AndroidStatus | null>(null);
+
+  useEffect(() => {
+    if (!androidApp()) return;
+    setInApp(true);
+    const refresh = () => setStatus(androidStatus());
+    refresh();
+    const id = setInterval(refresh, 1500);
+    return () => clearInterval(id);
+  }, []);
+
+  const app = androidApp();
+
+  if (!inApp) {
+    return (
+      <Card className="relative overflow-hidden p-6">
+        <div className="absolute right-0 top-0 rounded-bl-2xl bg-cyan-400/15 px-3 py-1 text-xs font-semibold text-cyan-200">Android</div>
+        <div className="flex items-center gap-3">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-cyan-400 to-emerald-400 text-emerald-950">
+            <Layers className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="font-display text-xl font-bold">Bulle flottante (appli Android)</h2>
+            <p className="text-sm text-slate-400">Une bulle « MS » par-dessus Bet261, comme Hi Translate</p>
+          </div>
+        </div>
+        <ol className="mt-5 list-decimal space-y-2 pl-5 text-sm text-slate-300">
+          <li>Télécharge et installe l&apos;appli (autorise « sources inconnues » si Android le demande).</li>
+          <li>Ouvre MatchScores → page Connecter → active les 2 autorisations.</li>
+          <li>Ouvre Bet261 (appli ou Chrome) sur une liste de matchs, touche ou dépose la bulle : l&apos;analyse s&apos;affiche.</li>
+        </ol>
+        <a href={APK_URL} className="mt-5 inline-block">
+          <Button variant="primary">
+            <Download className="h-4 w-4" /> Télécharger l&apos;APK
+          </Button>
+        </a>
+        <p className="mt-2 text-xs text-slate-500">Fichier construit automatiquement depuis ton dépôt GitHub (Releases).</p>
+      </Card>
+    );
+  }
+
+  const s = status ?? { overlay: false, accessibility: false, bubble: false, version: "?" };
+  return (
+    <Card className="relative overflow-hidden p-6">
+      <div className="absolute right-0 top-0 rounded-bl-2xl bg-emerald-400/15 px-3 py-1 text-xs font-semibold text-emerald-200">Appli v{s.version}</div>
+      <div className="flex items-center gap-3">
+        <div className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-cyan-400 to-emerald-400 text-emerald-950">
+          <Layers className="h-5 w-5" />
+        </div>
+        <div>
+          <h2 className="font-display text-xl font-bold">Bulle flottante</h2>
+          <p className="text-sm text-slate-400">Active-la une fois, elle reste disponible par-dessus Bet261</p>
+        </div>
+      </div>
+
+      <div className="mt-5 space-y-4">
+        <Check ok={s.overlay}>
+          <div className="font-semibold">Affichage par-dessus les autres applis</div>
+          {!s.overlay && (
+            <Button className="mt-2" variant="outline" onClick={() => app?.requestOverlay()}>
+              Autoriser
+            </Button>
+          )}
+        </Check>
+        <Check ok={s.accessibility}>
+          <div className="font-semibold">Lecture de l&apos;écran (Accessibilité)</div>
+          {!s.accessibility && (
+            <div className="mt-1 space-y-2 text-slate-400">
+              <p>
+                Paramètres → Accessibilité → Applications installées → <b className="text-slate-200">MatchScores — lecture des cotes</b> → Activer.
+              </p>
+              <p className="text-xs">
+                Option grisée (« paramètre restreint ») ? Ouvre les infos de l&apos;appli → menu ⋮ en haut à droite → « Autoriser les
+                paramètres restreints », puis recommence.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" onClick={() => app?.openAccessibility()}>
+                  <ShieldCheck className="h-4 w-4" /> Ouvrir Accessibilité
+                </Button>
+                <Button variant="ghost" onClick={() => app?.openAppInfo()}>
+                  Infos de l&apos;appli
+                </Button>
+              </div>
+            </div>
+          )}
+        </Check>
+        <Check ok={s.bubble}>
+          <div className="font-semibold">Bulle affichée</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {s.bubble ? (
+              <Button variant="outline" onClick={() => app?.stopBubble()}>
+                <Power className="h-4 w-4" /> Arrêter la bulle
+              </Button>
+            ) : (
+              <Button variant="primary" disabled={!s.overlay} onClick={() => app?.startBubble()}>
+                <Layers className="h-4 w-4" /> Afficher la bulle
+              </Button>
+            )}
+            <Button variant="ghost" onClick={() => app?.openUrl("https://bet261.mg")}>
+              Ouvrir Bet261
+            </Button>
+          </div>
+        </Check>
+      </div>
+      <p className="mt-5 text-xs text-slate-500">
+        Sur Bet261, ouvre une liste de matchs (ou les Virtuels) puis touche la bulle, ou déplace-la et relâche-la sur l&apos;écran : le
+        panneau d&apos;analyse s&apos;ouvre. Fais défiler et retouche pour ajouter des matchs.
+      </p>
+    </Card>
+  );
+}

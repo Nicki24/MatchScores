@@ -7,12 +7,26 @@ paris du plus sûr au plus risqué.
 > Aucun pari n'est sans risque. L'outil estime des probabilités à partir des cotes : il réduit les mauvais choix, il ne
 > garantit aucun gain.
 
-## Récupération des données : 3 méthodes
+## Appli Android : bulle flottante
+
+Le dossier `android/` contient une appli Kotlin (sans dépendance externe) :
+
+- une **bulle « MS »** affichée par-dessus les autres applis (comme Hi Translate) ;
+- toucher la bulle, ou la déplacer puis la relâcher, **lit le texte de l'écran** (service d'accessibilité) :
+  liste des matchs Bet261 dans l'appli ou dans Chrome ;
+- un **panneau** (page `/bulle` de l'app web) affiche les paris les plus sûrs ; « Analyse complète » ouvre l'app.
+
+GitHub Actions (`.github/workflows/android.yml`) construit l'APK à chaque modification de `android/` et le publie dans la
+release `android-latest` :
+[MatchScores.apk](https://github.com/Nicki24/MatchScores/releases/download/android-latest/MatchScores.apk).
+
+## Récupération des données : 4 méthodes
 
 | Méthode | Comment | Fiabilité |
 | --- | --- | --- |
 | **Assistant flottant** (recommandé) | Favori (bookmarklet) ou userscript qui ouvre un panneau par-dessus Bet261, lit les cotes affichées et les renvoie à l'app | ⭐⭐⭐ voit exactement ce que tu vois |
-| Scraping serveur | `GET /api/scrape` lit bet261.mg côté serveur (HTML, JSON embarqué, endpoints configurables) | ⭐ le site charge ses cotes en JavaScript |
+| Bulle Android | Lit l'écran de Bet261 (appli ou Chrome) quand on touche la bulle | ⭐⭐⭐ |
+| Scraping serveur | `GET /api/scrape` lit bet261.mg, analyse ses scripts pour trouver ses API internes et les interroge (`?debug` pour le rapport complet) | ⭐ dépend de l'ouverture des API |
 | Copier-coller / JSON | Ctrl+A / Ctrl+C sur la page Bet261, collé dans l'app | ⭐⭐ |
 
 Au premier lancement, l'app propose d'ouvrir l'assistant flottant (page **Connecter Bet261**).

@@ -16,6 +16,7 @@ export function InstallApp() {
   const [ios, setIos] = useState(false);
 
   useEffect(() => {
+    if (window.MatchScoresAndroid) return setInstalled(true); // déjà dans l'appli Android
     setInstalled(matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true);
     setIos(/iphone|ipad|ipod/i.test(navigator.userAgent));
     const onPrompt = (e: Event) => {

@@ -27,6 +27,8 @@ export function Nav() {
   const snapshot = useStore((s) => s.snapshot);
   const hydrated = useHydrated();
 
+  if (path.startsWith("/bulle")) return null; // panneau de la bulle Android : pas de navigation
+
   return (
     <header className="sticky top-0 z-40 border-b border-white/5 bg-ink-950/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:px-6">

@@ -21,6 +21,14 @@ export function detectSport(text?: string | null): Sport | undefined {
 
 export const ODDS_RE = /^\d{1,3}[.,]\d{1,3}$/;
 
+/** Cote contenue dans un petit texte : « 1.85 » ou « 1 1.85 », « X 3,40 », « +2.5 1.90 ». */
+export function oddsInLabel(text: string): number | undefined {
+  if (ODDS_RE.test(text)) return parseOdds(text);
+  if (text.length > 24) return undefined;
+  const m = text.match(/(?:^|\s)(\d{1,3}[.,]\d{2})$/);
+  return m ? parseOdds(m[1]) : undefined;
+}
+
 export function parseOdds(v: unknown): number | undefined {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v.trim().replace(",", ".")) : NaN;
   return Number.isFinite(n) && n >= 1.01 && n <= 1000 ? n : undefined;

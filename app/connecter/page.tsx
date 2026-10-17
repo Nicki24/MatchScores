@@ -23,6 +23,8 @@ import { decodeSnapshot, isSnapshot, snapshotFromText } from "@/lib/snapshot";
 import type { Snapshot } from "@/lib/types";
 import { Button, Card } from "@/components/ui";
 import { InstallApp } from "@/components/InstallApp";
+import { AndroidBubble } from "@/components/AndroidBubble";
+import { androidApp } from "@/lib/android";
 
 const BET261 = "https://bet261.mg";
 
@@ -140,6 +142,7 @@ export default function ConnectPage() {
       </section>
 
       <InstallApp />
+      <AndroidBubble />
 
       <AnimatePresence>
         {toast && (
@@ -204,7 +207,7 @@ export default function ConnectPage() {
               </details>
             </Step>
             <Step n={2} title="Ouvre Bet261">
-              <Button variant="outline" onClick={() => window.open(BET261, "bet261")}>
+              <Button variant="outline" onClick={() => (androidApp() ? androidApp()!.openUrl(BET261) : window.open(BET261, "bet261"))}>
                 <ExternalLink className="h-4 w-4" /> Ouvrir bet261.mg
               </Button>
               <p className="mt-2">Va sur la liste des matchs (Football, Basket, Tennis…) ou sur la section Virtuels.</p>
@@ -234,6 +237,9 @@ export default function ConnectPage() {
             <Button className="mt-4" variant="outline" onClick={runScrape} disabled={scrape.loading}>
               {scrape.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Puzzle className="h-4 w-4" />} Lancer le scraping
             </Button>
+            <a href="/api/scrape?debug" target="_blank" className="ml-3 text-xs text-slate-500 underline">
+              Rapport détaillé
+            </a>
             {scrape.diagnostics && (
               <ul className={`mt-3 space-y-1 rounded-xl p-3 font-mono text-[11px] ${scrape.ok ? "bg-emerald-400/5 text-emerald-200" : "bg-rose-400/5 text-rose-200"}`}>
                 {scrape.diagnostics.map((d) => (

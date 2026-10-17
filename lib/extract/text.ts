@@ -19,6 +19,7 @@ function splitTeams(line: string): [string, string] | undefined {
   return m ? [cleanName(m[1]), cleanName(m[2])] : undefined;
 }
 
+const OUTCOME = /^(1|x|n|2|1x|x2|12)$/i;
 const TIME_RE = /\b(\d{1,2})[:h](\d{2})\b/;
 
 export function parseMatchesFromText(text: string, opts: { sport?: Sport; virtual?: boolean } = {}): Match[] {
@@ -65,7 +66,12 @@ export function parseMatchesFromText(text: string, opts: { sport?: Sport; virtua
     // Suite de cotes consécutives
     const run: number[] = [];
     let j = i;
-    while (j < toks.length && toks[j].odds && run.length < 12) run.push(toks[j++].odds!);
+    while (j < toks.length && run.length < 12) {
+      if (toks[j].odds) run.push(toks[j++].odds!);
+      // Libellés d'issue intercalés (« 1 1.85 X 3.40 2 4.20 ») : on les saute.
+      else if (OUTCOME.test(toks[j].text) && toks[j + 1]?.odds) j++;
+      else break;
+    }
     i = j - 1;
 
     let teams: [string, string] | undefined;

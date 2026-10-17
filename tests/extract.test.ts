@@ -72,3 +72,10 @@ test("classement, résultats et forme", () => {
   assert.equal(rs[1].awayGoals, 0);
   assert.deepEqual(parseForm("WDL"), ["W", "D", "L"]);
 });
+
+test("texte lu par l'appli Android : libellés 1 / X / 2 entre les cotes", () => {
+  const text = ["Football", "Premier League", "20:45", "Arsenal", "Chelsea", "1", "1.85", "X", "3.40", "2", "4.20", "+124", "Liverpool", "Everton", "1", "1.30", "X", "5.50", "2", "9.00"].join("\n");
+  const ms = parseMatchesFromText(text);
+  assert.equal(ms.length, 2);
+  assert.deepEqual(ms[1].markets[0].selections.map((s) => s.odds), [1.3, 5.5, 9]);
+});

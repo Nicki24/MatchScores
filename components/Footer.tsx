@@ -1,4 +1,9 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+
 export function Footer() {
+  if (usePathname().startsWith("/bulle")) return null;
   return (
     <footer className="border-t border-white/5 py-8 text-center text-xs leading-relaxed text-slate-500">
       <p className="mx-auto max-w-2xl px-4">

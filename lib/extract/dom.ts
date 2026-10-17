@@ -1,5 +1,5 @@
 import type { Match, Sport } from "../types";
-import { buildMainMarket, cleanName, detectSport, ODDS_RE, parseOdds, uid } from "./normalize";
+import { buildMainMarket, cleanName, detectSport, oddsInLabel, uid } from "./normalize";
 import { dedupeMatches } from "./json";
 
 /**
@@ -52,7 +52,7 @@ export function extractMatchesFromDom(root: ParentNode = document, opts: { sport
   const container = root instanceof Document ? root.body : (root as Element);
   if (!container) return [];
   const leaves = leafTexts(container);
-  const oddsEls = leaves.filter((l) => ODDS_RE.test(l.text) && visible(l.el));
+  const oddsEls = leaves.filter((l) => oddsInLabel(l.text) && visible(l.el));
   const rows = new Set<Element>();
   const visited = new Set<Element>();
 
@@ -62,8 +62,8 @@ export function extractMatchesFromDom(root: ParentNode = document, opts: { sport
       if (visited.has(cur)) break; // ancêtre déjà évalué depuis une autre cote
       visited.add(cur);
       const texts = leafTexts(cur);
-      const odds = texts.filter((t) => ODDS_RE.test(t.text));
-      const names = texts.filter((t) => /[a-zà-ÿ]{2,}/i.test(t.text) && !LABEL_NOISE.test(t.text) && t.text.length <= 60);
+      const odds = texts.filter((t) => oddsInLabel(t.text));
+      const names = texts.filter((t) => /[a-zà-ÿ]{2,}/i.test(t.text) && !LABEL_NOISE.test(t.text) && !oddsInLabel(t.text) && t.text.length <= 60);
       if (odds.length > 40) break; // on a dépassé la ligne : c'est une liste entière
       if (odds.length >= 2 && (names.length >= 2 || names.some((n) => /\s(-|–|vs)\s/i.test(n.text)))) {
         rows.add(cur);
@@ -79,10 +79,10 @@ export function extractMatchesFromDom(root: ParentNode = document, opts: { sport
   const matches: Match[] = [];
   for (const row of inner) {
     const texts = leafTexts(row);
-    const odds = texts.map((t) => (ODDS_RE.test(t.text) ? parseOdds(t.text) : undefined)).filter((n): n is number => !!n);
+    const odds = texts.map((t) => oddsInLabel(t.text)).filter((n): n is number => !!n);
     const names = texts
       .map((t) => t.text)
-      .filter((t) => /[a-zà-ÿ]{2,}/i.test(t) && !LABEL_NOISE.test(t) && t.length <= 60)
+      .filter((t) => /[a-zà-ÿ]{2,}/i.test(t) && !LABEL_NOISE.test(t) && !oddsInLabel(t) && t.length <= 60)
       .map(cleanName);
     let home: string | undefined;
     let away: string | undefined;
