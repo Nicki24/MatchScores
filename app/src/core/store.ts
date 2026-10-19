@@ -171,6 +171,7 @@ export async function applyBatch(db: MatchScoresDB, sourceId: string, batch: Nor
         updated_at: capturedAt,
         methods: [...new Set([...(prev?.methods ?? []), method])],
         score_method: prev?.score_method ?? (hasScore && incomingStatus === "finished" ? method : undefined),
+        result_methods: hasScore && incomingStatus === "finished" ? [...new Set([...(prev?.result_methods ?? []), method])] : prev?.result_methods,
       };
       await db.matches.put(row);
     }

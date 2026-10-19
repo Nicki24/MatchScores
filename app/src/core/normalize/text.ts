@@ -25,7 +25,16 @@ const STANDING_RE =
   /^(\d{1,2})[.)]?\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 .'&-]{1,40}?)\s+((?:[+-]?\d{1,3}(?::\d{1,3})?\s+){2,9}[+-]?\d{1,3}(?::\d{1,3})?)(?:\s+([VNDPWL]{1,10}))?$/i;
 
 function isName(line: string) {
-  return line.length >= 2 && line.length <= 50 && /[a-zà-ÿ]{2,}/i.test(line) && !NOISE.test(line) && !ODDS_RE.test(line) && !SPORT_HEADING.test(line);
+  return (
+    line.length >= 2 &&
+    line.length <= 50 &&
+    /[a-zà-ÿ]{2,}/i.test(line) &&
+    !NOISE.test(line) &&
+    !ODDS_RE.test(line) &&
+    !SPORT_HEADING.test(line) &&
+    !RESULT_RE.test(line) &&
+    !/^[VNDPWL]{3,10}$/.test(line)
+  );
 }
 
 function splitTeams(line: string): [string, string] | undefined {
@@ -45,9 +54,16 @@ function tokenize(text: string): Tok[] {
     const line = raw.replace(/\t+/g, "  ").trim();
     if (!line) continue;
     // « A - B 1.85 3.40 4.20 » : on sépare les cotes des noms
-    for (const part of line.split(/\s{2,}|\s(?=\d{1,3}[.,]\d{2}(?:\s|$))/)) {
+    for (const part of line.split(/\t|\s{2,}|\s(?=\d{1,3}[.,]\d{2}(?:\s|$))/)) {
       const t = part.trim();
-      if (t) toks.push({ text: t, odds: ODDS_RE.test(t) ? parseOdds(t) : undefined });
+      if (!t) continue;
+      const glued = t.match(/^(x|n)\s?(\d{1,3}[.,]\d{2})$/i);
+      if (glued) {
+        toks.push({ text: glued[1] });
+        toks.push({ text: glued[2], odds: parseOdds(glued[2]) });
+        continue;
+      }
+      toks.push({ text: t, odds: ODDS_RE.test(t) ? parseOdds(t) : undefined });
     }
   }
   return toks;
@@ -125,56 +141,91 @@ function parseMatches(text: string, reference: Date, layout: Layout) {
   return { matches, odds, dangling };
 }
 
+function standingFromNumbers(position: number, team: string, nums: number[], form?: string): StandingInput {
+  const s: StandingInput = { position, team: cleanName(team), points: nums[nums.length - 1], played: nums[0], goals_for: 0, goals_against: 0 };
+  if (nums.length >= 7) {
+    // J G N P BP BC (Diff) Pts
+    [s.played, s.won, s.drawn, s.lost, s.goals_for, s.goals_against] = nums;
+  } else if (nums.length >= 4) {
+    [s.played, s.won, s.drawn, s.lost] = nums;
+  }
+  if (form) s.form = form.toUpperCase();
+  return s;
+}
+
+const INT = /^[+-]?\d{1,3}$/;
+const FORM = /^[VNDPWL]{1,10}$/i;
+
 export function parseStandingsText(text: string): StandingInput[] {
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/\t/g, " ").replace(/\s+/g, " ").trim()).filter(Boolean);
   const out: StandingInput[] = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/\t/g, " ").replace(/\s+/g, " ").trim();
+  // 1. Une ligne par équipe : « 1 London Reds 5 4 1 0 12 4 8 13 WWDWW »
+  for (const line of lines) {
     const m = line.match(STANDING_RE);
     if (!m) continue;
-    const nums = m[3]
-      .trim()
-      .split(/\s+/)
-      .flatMap((n) => (n.includes(":") ? n.split(":") : [n]))
-      .map(Number);
-    const s: StandingInput = { position: Number(m[1]), team: cleanName(m[2]), points: nums[nums.length - 1], played: nums[0], goals_for: 0, goals_against: 0 };
-    if (nums.length >= 8) {
-      // J G N P BP BC Diff Pts
-      [s.played, s.won, s.drawn, s.lost, s.goals_for, s.goals_against] = nums;
-    } else if (nums.length === 7) {
-      [s.played, s.won, s.drawn, s.lost, s.goals_for, s.goals_against] = nums;
-    } else if (nums.length >= 4) {
-      [s.played, s.won, s.drawn, s.lost] = nums;
-    }
-    if (m[4]) s.form = m[4].toUpperCase();
-    out.push(s);
+    const nums = m[3].trim().split(/\s+/).flatMap((n) => (n.includes(":") ? n.split(":") : [n])).map(Number);
+    out.push(standingFromNumbers(Number(m[1]), m[2], nums, m[4]));
   }
-  // Un vrai classement a plusieurs lignes aux positions croissantes
-  return out.length >= 4 ? out : [];
+  if (out.length >= 4) return out;
+  // 2. Une cellule par ligne (tableaux en <div>) : position, équipe, nombres…, forme
+  const rows: StandingInput[] = [];
+  for (let i = 0; i < lines.length - 3; i++) {
+    if (!/^\d{1,2}\.?$/.test(lines[i]) || !/[a-zà-ÿ]{2,}/i.test(lines[i + 1]) || INT.test(lines[i + 1])) continue;
+    const nums: number[] = [];
+    let j = i + 2;
+    while (j < lines.length && INT.test(lines[j]) && nums.length < 10) nums.push(Number(lines[j++]));
+    if (nums.length < 2) continue;
+    const form = j < lines.length && FORM.test(lines[j]) ? lines[j] : undefined;
+    const pos = Number(lines[i].replace(".", ""));
+    if (rows.length && pos !== rows[rows.length - 1].position + 1) {
+      if (rows.length >= 4) break;
+      rows.length = 0;
+    }
+    if (!rows.length && pos !== 1) continue;
+    rows.push(standingFromNumbers(pos, lines[i + 1], nums, form));
+    i = j - 1;
+  }
+  return rows.length >= 4 ? rows : [];
 }
+
+const SCORE_TOKEN = /^(\d{1,2})\s*[-:–]\s*(\d{1,2})$/;
+const isTeamLine = (l: string) => l.length >= 2 && l.length <= 40 && /[a-zà-ÿ]{2,}/i.test(l) && !NOISE.test(l) && !isRoundLine(l) && !LEAGUE_HINT.test(l);
 
 export function parseResultsText(text: string, reference: Date): MatchInput[] {
   const out: MatchInput[] = [];
   let league: string | undefined;
   let round: number | undefined;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/\s+/g, " ").trim();
-    if (isRoundLine(line)) round = roundOfLine(line);
-    else if (LEAGUE_HINT.test(line) && line.length <= 40) league = cleanName(line);
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const push = (home: string, hs: number, as: number, away: string) =>
+    out.push({ external_id: domId(round, undefined, cleanName(home), cleanName(away)), league, round, home_team: cleanName(home), away_team: cleanName(away), status: "finished", home_score: hs, away_score: as, fuzzy: round == null });
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (isRoundLine(line)) {
+      round = roundOfLine(line);
+      continue;
+    }
+    if (LEAGUE_HINT.test(line) && line.length <= 40) {
+      league = cleanName(line);
+      continue;
+    }
+    // « London Reds 2 - 1 Leeds »
     const m = line.match(RESULT_RE);
-    if (!m) continue;
-    const home = cleanName(m[1]);
-    const away = cleanName(m[4]);
-    out.push({
-      external_id: domId(round, undefined, home, away),
-      league,
-      round,
-      home_team: home,
-      away_team: away,
-      status: "finished",
-      home_score: Number(m[2]),
-      away_score: Number(m[3]),
-      fuzzy: round == null,
-    });
+    if (m) {
+      push(m[1], Number(m[2]), Number(m[3]), m[4]);
+      continue;
+    }
+    // « London Reds » / « 2 - 1 » / « Leeds »
+    const sc = lines[i + 1]?.match(SCORE_TOKEN);
+    if (sc && isTeamLine(line) && lines[i + 2] && isTeamLine(lines[i + 2])) {
+      push(line, Number(sc[1]), Number(sc[2]), lines[i + 2]);
+      i += 2;
+      continue;
+    }
+    // « London Reds » / « 2 » / « - » / « 1 » / « Leeds »
+    if (isTeamLine(line) && /^\d{1,2}$/.test(lines[i + 1] ?? "") && /^[-:–]$/.test(lines[i + 2] ?? "") && /^\d{1,2}$/.test(lines[i + 3] ?? "") && lines[i + 4] && isTeamLine(lines[i + 4])) {
+      push(line, Number(lines[i + 1]), Number(lines[i + 3]), lines[i + 4]);
+      i += 4;
+    }
   }
   void reference;
   return out;

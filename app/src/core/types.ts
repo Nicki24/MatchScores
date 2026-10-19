@@ -68,6 +68,8 @@ export interface MatchRow {
   methods: Method[];
   /** Méthode qui a fourni le score final. */
   score_method?: Method;
+  /** Méthodes ayant vu le score final (complétude par méthode). */
+  result_methods?: Method[];
 }
 
 /** Table odds — une ligne par changement de cote (historique horodaté, F2). */
