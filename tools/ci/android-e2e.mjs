@@ -30,6 +30,7 @@ function cdp(url) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
     let id = 0;
+    let closed = false;
     const waiting = new Map();
     ws.on("message", (raw) => {
       const m = JSON.parse(String(raw));
@@ -39,22 +40,33 @@ function cdp(url) {
       }
     });
     ws.on("error", reject);
+    ws.on("close", () => {
+      // Page détruite (écran recréé par Android…) : les appels en cours échouent au lieu d'attendre indéfiniment
+      closed = true;
+      for (const done of waiting.values()) done({ error: { message: "connexion fermée" } });
+      waiting.clear();
+    });
     ws.on("open", () =>
       resolve({
+        get closed() {
+          return closed;
+        },
         async evaluate(expression) {
+          if (closed) throw new Error("connexion fermée");
           const m = await new Promise((r) => {
             const n = ++id;
-            waiting.set(n, r);
+            const timer = setTimeout(() => {
+              waiting.delete(n);
+              r({ error: { message: "pas de réponse en 30 s" } });
+            }, 30_000);
+            waiting.set(n, (x) => {
+              clearTimeout(timer);
+              r(x);
+            });
             ws.send(JSON.stringify({ id: n, method: "Runtime.evaluate", params: { expression, awaitPromise: true, returnByValue: true } }));
           });
           if (m.error || m.result?.exceptionDetails) throw new Error(JSON.stringify(m.error ?? m.result.exceptionDetails));
           return m.result.result.value;
-        },
-        click(selector) {
-          return this.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) throw new Error("introuvable : ${selector.replace(/"/g, "'")}"); e.click(); return true; })()`);
-        },
-        count(selector) {
-          return this.evaluate(`document.querySelectorAll(${JSON.stringify(selector)}).length`);
         },
         close: () => ws.close(),
       }),
@@ -97,12 +109,41 @@ try {
   }, 60_000, "débogage WebView");
   adb("forward", "tcp:9333", `localabstract:${socket.name}`);
   const targets = async () => (await fetch("http://127.0.0.1:9333/json/list")).json();
-  const uiTarget = await waitFor(async () => {
-    const t = (await targets()).find((x) => x.type === "page" && x.url.startsWith("https://appassets.androidplatform.net"));
-    return t ? { ok: true, t } : false;
-  }, 60_000, "interface");
+  /**
+   * Interface de l'appli. Android peut recréer l'écran (au démarrage de l'émulateur notamment) :
+   * on attend qu'une seule interface soit ouverte et on s'y reconnecte si elle disparaît.
+   */
+  let uiConn;
+  const connectUi = async () => {
+    const found = await waitFor(async () => {
+      const pages = (await targets()).filter((x) => x.type === "page" && x.url.startsWith("https://appassets.androidplatform.net"));
+      return pages.length === 1 ? { ok: true, t: pages[0] } : { ok: false, pages: pages.length };
+    }, 60_000, "interface");
+    uiConn = await cdp(found.t.webSocketDebuggerUrl);
+    return uiConn;
+  };
+  const ui = {
+    async evaluate(expression) {
+      for (let attempt = 0; ; attempt++) {
+        const conn = uiConn && !uiConn.closed ? uiConn : await connectUi();
+        try {
+          return await conn.evaluate(expression);
+        } catch (e) {
+          if (!conn.closed || attempt >= 2) throw e;
+          step("interface recréée : reconnexion");
+        }
+      }
+    },
+    click(selector) {
+      return this.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) throw new Error("introuvable : ${selector.replace(/"/g, "'")}"); e.click(); return true; })()`);
+    },
+    count(selector) {
+      return this.evaluate(`document.querySelectorAll(${JSON.stringify(selector)}).length`);
+    },
+    close: () => uiConn?.close(),
+  };
   await waitFor(async () => ({ ok: (await targets()).some((x) => x.type === "page" && x.url.includes("10.0.2.2:4173")) }), 60_000, "collecteur");
-  const ui = await cdp(uiTarget.t.webSocketDebuggerUrl);
+  await ui.evaluate("document.readyState");
   step("interface et collecteur chargés", { pages: (await targets()).map((x) => x.url) });
 
   /** Base locale de l'appli, lue depuis l'interface. */

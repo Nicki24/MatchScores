@@ -59,6 +59,8 @@ class MainActivity : Activity() {
         private const val DEFAULT_START = "https://bet261.mg/"
         private const val PREFS = "matchscores"
         private const val CHANNEL = "alerts"
+        private const val STATE_URL = "collectorUrl"
+        private const val STATE_VISIBLE = "collectorVisible"
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -137,7 +139,20 @@ class MainActivity : Activity() {
         setContentView(root)
 
         ui.loadUrl(UI_URL)
-        handleIntent(intent)
+        val restoredUrl = savedInstanceState?.getString(STATE_URL)
+        if (savedInstanceState == null) {
+            handleIntent(intent)
+        } else {
+            // Écran recréé par Android (thème, fond d'écran, taille d'affichage…) : la collecte reprend sur la même page
+            if (restoredUrl != null) startCollector(restoredUrl)
+            if (savedInstanceState.getBoolean(STATE_VISIBLE)) showCollector(true)
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (collectorStarted) collector.url?.let { outState.putString(STATE_URL, it) }
+        outState.putBoolean(STATE_VISIBLE, collectorVisible)
     }
 
     override fun onNewIntent(intent: Intent) {
