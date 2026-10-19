@@ -1,0 +1,15 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+*.tsbuildinfo
+.vite/
+# générés par le build
+app/src/collector/collector.generated.ts
+android/app/src/main/assets/app/
+android/app/src/main/assets/collector.js
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

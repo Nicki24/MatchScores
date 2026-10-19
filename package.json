@@ -1,0 +1,41 @@
+{
+  "name": "matchscores",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MatchScores — collecte et analyse du football virtuel bet261 depuis un téléphone Android",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run build:collector && tsc -p tsconfig.json --noEmit && vite build",
+    "build:collector": "node scripts/build-collector.mjs",
+    "build:android": "npm run build && node scripts/copy-android-assets.mjs",
+    "mock": "tsx tools/mock-site/server.ts",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "dexie": "4.2.1",
+    "dexie-react-hooks": "4.2.0",
+    "lucide-react": "1.40.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@tailwindcss/vite": "4.1.18",
+    "@types/node": "22.19.1",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "@types/ws": "8.18.1",
+    "@vitejs/plugin-react": "5.1.4",
+    "esbuild": "0.25.12",
+    "fake-indexeddb": "6.2.5",
+    "tailwindcss": "4.1.18",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "3.2.7",
+    "ws": "8.18.3"
+  }
+}
