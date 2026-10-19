@@ -1,0 +1,8 @@
+{
+  "name": "matchscores-explore",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "playwright": "1.56.1"
+  }
+}
