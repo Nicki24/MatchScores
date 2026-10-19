@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
-import type { FormLetter } from "../core/analysis";
+import { selectionLabel, type FormLetter } from "../core/analysis";
+import type { Choice, Confidence } from "../core/predict";
+import type { MatchRow } from "../core/types";
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
@@ -135,3 +137,13 @@ export function ago(iso?: string) {
   if (s < 3600) return `il y a ${Math.round(s / 60)} min`;
   return `il y a ${Math.round(s / 3600)} h`;
 }
+
+const CONFIDENCE_TONE: Record<Confidence, "green" | "cyan" | "amber"> = { "très probable": "green", probable: "cyan", incertain: "amber" };
+
+export function ConfidencePill({ c }: { c: Confidence }) {
+  return <Pill tone={CONFIDENCE_TONE[c]}>{c[0].toUpperCase() + c.slice(1)}</Pill>;
+}
+
+/** Libellé d'un pronostic : nom de l'équipe, « Nul », « Leeds ou nul »… */
+export const choiceLabel = (c: Choice, m: Pick<MatchRow, "home_team" | "away_team">) => selectionLabel(c.market, c.selection, m);
+export const scoreLabel = (s: { home: number; away: number }) => `${s.home}-${s.away}`;

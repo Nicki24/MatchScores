@@ -3,9 +3,10 @@ import { ArrowLeft, Radio, TriangleAlert } from "lucide-react";
 import { db } from "../db";
 import { computeTable, favourite, headToHead, marketLabel, marketsOf, pct, selectionLabel, teamForm } from "../core/analysis";
 import { teamKey } from "../core/normalize/util";
+import { openingMarkets, outcomeOf, predict } from "../core/predict";
 import type { MatchRow } from "../core/types";
 import { useLatestStandings, useMatches, useOddsFor, useTick, useViewSource } from "./hooks";
-import { Button, Card, Empty, FormChips, fmtDateTime, fmtTime, Pill, ProbBar, Section } from "./kit";
+import { Button, Card, choiceLabel, ConfidencePill, cx, Empty, FormChips, fmtDateTime, fmtTime, Pill, ProbBar, scoreLabel, Section } from "./kit";
 
 const COLORS: Record<string, string> = { "1": "#34d399", X: "#94a3b8", "2": "#22d3ee" };
 
@@ -14,18 +15,18 @@ export function Disclaimer() {
     <div className="mb-4 flex gap-2 rounded-xl border border-amber-400/25 bg-amber-400/[.06] p-3 text-[12px] leading-snug text-amber-100/90">
       <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
       <p>
-        Les matchs virtuels sont tirés au sort par un générateur aléatoire : les statistiques décrivent le passé et les cotes, elles ne prédisent
-        pas le prochain résultat. MatchScores ne place aucun pari. Jouer comporte des risques : mise uniquement ce que tu peux perdre.
+        Les matchs virtuels sont tirés au sort par un générateur aléatoire : les pronostics sont des probabilités calculées à partir des cotes,
+        jamais des certitudes. MatchScores ne place aucun pari. Jouer comporte des risques : mise uniquement ce que tu peux perdre.
       </p>
     </div>
   );
 }
 
-function roundTitle(m: MatchRow) {
+export function roundTitle(m: MatchRow) {
   return [m.league ?? "Ligue", m.season ? `Saison ${m.season}` : null, m.round != null ? `Journée ${m.round}` : null].filter(Boolean).join(" · ");
 }
 
-function groupByRound(ms: MatchRow[]) {
+export function groupByRound(ms: MatchRow[]) {
   const groups = new Map<string, MatchRow[]>();
   for (const m of ms) {
     const k = roundTitle(m);
@@ -249,6 +250,9 @@ export function MatchDetail({ matchKey, onClose }: { matchKey: string; onClose: 
   const standings = useLatestStandings(m?.source_id ?? "");
   if (!m) return null;
   const markets = marketsOf(odds ?? []);
+  // Match terminé : le pronostic d'avant-match (premières cotes relevées), comparé au résultat
+  const finished = m.status === "finished" && m.home_score != null && m.away_score != null;
+  const pred = predict(finished ? openingMarkets(odds ?? []) : markets);
   const forms = [teamForm(m.home_team, all ?? [], m), teamForm(m.away_team, all ?? [], m)];
   const h2h = headToHead(m.home_team, m.away_team, (all ?? []).filter((x) => x.key !== m.key));
   const lastStand = (standings ?? []).reduce<Record<string, number>>((acc, r) => {
@@ -322,6 +326,59 @@ export function MatchDetail({ matchKey, onClose }: { matchKey: string; onClose: 
             </div>
           )}
         </Section>
+
+        {pred && (
+          <Section title={finished ? "Pronostic d'avant-match" : "Pronostic (d'après les cotes)"}>
+            <Card className="p-3">
+              <div data-testid="detail-prediction">
+                <div className="flex items-center justify-between gap-2 text-sm">
+                  <span className="min-w-0">
+                    Résultat le plus probable : <b>{choiceLabel(pred.outcome, m)}</b>
+                  </span>
+                  {finished ? (
+                    <Pill tone={pred.outcome.selection === outcomeOf(m) ? "green" : "red"}>{pred.outcome.selection === outcomeOf(m) ? "Réussi" : "Raté"}</Pill>
+                  ) : (
+                    <ConfidencePill c={pred.confidence} />
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-slate-400 tabular">
+                  {pct(pred.outcome.probability)} · risque {pct(1 - pred.outcome.probability)} · double chance : {choiceLabel(pred.safest, m)} (
+                  {pct(pred.safest.probability)})
+                </div>
+                <div className="mt-3 text-xs font-semibold text-slate-300">
+                  Scores exacts les plus probables {pred.scoreSource === "marché" ? "(cotes du score exact)" : "(modèle de buts ajusté sur les cotes)"}
+                </div>
+                <div className="mt-1.5 space-y-1">
+                  {pred.scores.map((s) => (
+                    <div key={scoreLabel(s)} className="flex items-center gap-2 text-sm" data-testid="detail-score">
+                      <span className={cx("w-10 font-bold tabular", finished && s.home === m.home_score && s.away === m.away_score && "text-emerald-300")}>{scoreLabel(s)}</span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/8">
+                        <div className="h-full rounded-full bg-cyan-400/80" style={{ width: `${(s.probability / pred.scores[0].probability) * 100}%` }} />
+                      </div>
+                      <span className="w-10 text-right text-xs text-slate-400 tabular">{pct(s.probability)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px] leading-tight text-slate-400">
+                  <div className="rounded-lg bg-white/5 p-2">
+                    <div className="text-sm font-bold text-slate-100 tabular">
+                      {pred.expected.home.toFixed(1)} – {pred.expected.away.toFixed(1)}
+                    </div>
+                    buts attendus
+                  </div>
+                  <div className="rounded-lg bg-white/5 p-2">
+                    <div className="text-sm font-bold text-slate-100 tabular">{pct(pred.over25)}</div>
+                    plus de 2,5 buts
+                  </div>
+                  <div className="rounded-lg bg-white/5 p-2">
+                    <div className="text-sm font-bold text-slate-100 tabular">{pct(pred.btts)}</div>
+                    les deux marquent
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </Section>
+        )}
 
         <Section title="Forme récente (5 derniers matchs collectés)">
           <Card className="divide-y divide-white/5">

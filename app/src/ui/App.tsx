@@ -1,4 +1,4 @@
-import { CalendarClock, ListOrdered, MoreHorizontal, Radar, Trophy } from "lucide-react";
+import { CalendarClock, ListOrdered, MoreHorizontal, Radar, Target, Trophy } from "lucide-react";
 import { useState } from "react";
 import { db } from "../db";
 import { setDemo, useRuntime } from "../runtime";
@@ -8,12 +8,14 @@ import { useViewSource } from "./hooks";
 import { cx, Pill } from "./kit";
 import { MatchDetail, MatchesPage, ResultsPage, StandingsPage } from "./MatchesPages";
 import { JournalPage, QualityPage, SettingsPage } from "./MorePages";
+import { PredictionsPage } from "./PredictionsPage";
 
-type Tab = "matches" | "results" | "standings" | "collect" | "more";
+type Tab = "matches" | "predictions" | "results" | "standings" | "collect" | "more";
 type More = "quality" | "journal" | "settings";
 
 const TABS: { id: Tab; label: string; icon: typeof Trophy }[] = [
   { id: "matches", label: "Matchs", icon: CalendarClock },
+  { id: "predictions", label: "Pronos", icon: Target },
   { id: "results", label: "Résultats", icon: ListOrdered },
   { id: "standings", label: "Classement", icon: Trophy },
   { id: "collect", label: "Collecte", icon: Radar },
@@ -49,6 +51,7 @@ export function App() {
       <main className="flex-1 overflow-y-auto px-3 pb-24 pt-4">
         <div className="mx-auto max-w-xl">
           {tab === "matches" && <MatchesPage onOpen={setDetail} onCollect={() => setTab("collect")} onDemo={startDemo} />}
+          {tab === "predictions" && <PredictionsPage onOpen={setDetail} />}
           {tab === "results" && <ResultsPage onOpen={setDetail} />}
           {tab === "standings" && <StandingsPage />}
           {tab === "collect" && <CollectPage onDemo={startDemo} />}
@@ -76,9 +79,9 @@ export function App() {
       </main>
 
       <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t border-white/5 bg-ink-950/95 backdrop-blur">
-        <div className="mx-auto grid max-w-xl grid-cols-5">
+        <div className="mx-auto grid max-w-xl grid-cols-6">
           {TABS.map(({ id, label, icon: Icon }) => (
-            <button key={id} data-testid={`tab-${id}`} onClick={() => setTab(id)} className={cx("flex flex-col items-center gap-0.5 py-2.5 text-[11px]", tab === id ? "text-emerald-300" : "text-slate-500")}>
+            <button key={id} data-testid={`tab-${id}`} onClick={() => setTab(id)} className={cx("flex flex-col items-center gap-0.5 py-2.5 text-[10.5px]", tab === id ? "text-emerald-300" : "text-slate-500")}>
               <Icon className="h-5 w-5" />
               {label}
             </button>

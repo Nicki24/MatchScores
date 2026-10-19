@@ -3,7 +3,8 @@
 //  2. l'interface affiche exactement les matchs et cotes 1X2 de la journée en cours ;
 //  3. résultats et classement sont affichés ; captures d'écran à chaque étape ;
 //  4. même vérification quand les matchs viennent d'une iframe d'une autre origine, puis du texte affiché seul ;
-//  5. le relevé de diagnostic est enregistré dans Téléchargements/MatchScores.
+//  5. les pronostics (issue la plus probable, moins risqués, bilan) sont affichés ;
+//  6. le relevé de diagnostic est enregistré dans Téléchargements/MatchScores.
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import WebSocket from "ws";
@@ -237,6 +238,28 @@ try {
   if (!fromText) throw new Error("texte : aucune lecture du texte affiché");
   step("texte : matchs lus sur l'écran uniquement (méthode D)", { captures: fromText });
 
+  // Pronostics : une carte par match à venir (l'issue à la cote la plus basse), les moins risqués, le bilan des matchs terminés
+  await ui.click('[data-testid="tab-predictions"]');
+  const pronos = await waitFor(async () => {
+    const t = await truth();
+    const upcoming = t.matches.filter((m) => m.status === "scheduled");
+    const cards = await ui.evaluate(`[...document.querySelectorAll('[data-testid="prediction-card"]')].map((e) => ({
+        text: e.textContent,
+        outcome: e.querySelector('[data-testid="prediction-outcome"]')?.textContent,
+      }))`);
+    const wrong = upcoming.filter((m) => {
+      const o = m.odds["1X2"];
+      const best = o.indexOf(Math.min(...o));
+      const label = best === 0 ? m.home : best === 1 ? "Nul" : m.away;
+      return !cards.some((c) => c.text.includes(`${m.home} – ${m.away}`) && c.outcome === label);
+    });
+    const safe = await ui.count('[data-testid="safe-pick"]');
+    const bilan = Number(await ui.evaluate(`document.querySelector('[data-testid="backtest-matches"]')?.textContent ?? "0"`));
+    return { ok: upcoming.length === 10 && cards.length === 10 && wrong.length === 0 && safe === 5 && bilan >= 10, cards: cards.length, wrong: wrong.length, safe, bilan, round: t.round };
+  }, 90_000, "pronostics");
+  step("pronostics affichés (issue la plus probable = cote la plus basse) et bilan", pronos);
+  await screencap("10-pronostics");
+
   // Relevé de diagnostic : enregistré dans Téléchargements/MatchScores puis proposé au partage
   await ui.click('[data-testid="tab-more"]');
   await ui.click('[data-testid="more-settings"]');
@@ -256,7 +279,7 @@ try {
   if (!releve.endpoints.some((e) => (e.normalized?.matches ?? 0) > 0) || !releve.pages.length) throw new Error("relevé incomplet");
   // Le site de test simule un solde et un numéro de téléphone : ils ne doivent jamais être relevés
   if (JSON.stringify(releve).includes("+261 34 00 000 00")) throw new Error("le relevé contient des données de compte");
-  await screencap("10-releve");
+  await screencap("11-releve");
   adb("shell", "input", "keyevent", "4");
 
   const counts = await idb(`return { raw: await count("raw_captures"), matches: await count("matches"), odds: await count("odds"), standings: await count("standings"), cycles: await count("cycles") };`);

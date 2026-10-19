@@ -83,6 +83,51 @@ test("chaîne complète — API JSON (méthode C) → base → écrans", async (
   await expect(app.getByTestId("cycle").first()).toBeVisible();
 });
 
+test("pronostics : issue la plus probable, moins risqués, scores exacts et bilan", async ({ context }) => {
+  const { app } = await pipeline(context, "api");
+  await expectMatchesShown(app);
+  await app.getByTestId("tab-predictions").click();
+  // Une carte par match à venir ; le pronostic est l'issue à la cote la plus basse
+  await expect
+    .poll(
+      async () => {
+        const truth = await getTruth(app);
+        const upcoming = truth.matches.filter((m) => m.status === "scheduled");
+        const cards = await app.getByTestId("prediction-card").evaluateAll((els) =>
+          els.map((e) => ({ text: e.textContent ?? "", outcome: e.querySelector('[data-testid="prediction-outcome"]')?.textContent })),
+        );
+        const wrong = upcoming.filter((m) => {
+          const o = m.odds["1X2"];
+          const best = o.indexOf(Math.min(...o));
+          const label = best === 0 ? m.home : best === 1 ? "Nul" : m.away;
+          return !cards.some((c) => c.text.includes(`${m.home} – ${m.away}`) && c.outcome === label);
+        });
+        return upcoming.length === 10 && cards.length === 10 ? wrong.length : -1;
+      },
+      { timeout: 40_000, intervals: [1000] },
+    )
+    .toBe(0);
+  const chips = await app.getByTestId("prediction-scores").first().locator("span").count();
+  expect(chips).toBe(4);
+  // Les moins risqués : du plus probable au moins probable
+  const probs = (await app.getByTestId("safe-probability").allTextContents()).map((t) => Number.parseInt(t, 10));
+  expect(probs).toHaveLength(5);
+  expect([...probs].sort((a, b) => b - a)).toEqual(probs);
+  await shot(app, "8-pronostics");
+
+  await app.getByTestId("prediction-card").first().click();
+  await expect(app.getByTestId("detail-prediction")).toBeVisible();
+  await expect(app.getByTestId("detail-score")).toHaveCount(5);
+  await shot(app, "9-detail-pronostic");
+  await app.getByRole("button", { name: "Retour" }).click();
+
+  // Bilan : dès que les matchs pronostiqués sont terminés, ils sont comparés aux résultats
+  await expect
+    .poll(async () => Number((await app.getByTestId("backtest-matches").textContent({ timeout: 1000 }).catch(() => "0")) ?? 0), { timeout: 45_000, intervals: [2000] })
+    .toBeGreaterThanOrEqual(10);
+  await expect(app.getByTestId("backtest-outcome")).toBeVisible();
+});
+
 test("chaîne complète — texte de la page seulement (méthode D)", async ({ context }) => {
   const { app } = await pipeline(context, "dom");
   await expectMatchesShown(app);
