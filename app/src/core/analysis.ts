@@ -101,11 +101,19 @@ export interface TeamForm {
 
 const finishedOnly = (ms: MatchRow[]) => ms.filter((m) => m.status === "finished" && m.home_score != null && m.away_score != null);
 
-/** Forme récente d'une équipe (du plus ancien au plus récent), à partir des résultats enregistrés. */
-export function teamForm(team: string, matches: MatchRow[], before?: string, n = 5): TeamForm {
+/**
+ * Forme récente d'une équipe (du plus ancien au plus récent), à partir des résultats enregistrés.
+ * Pour un match déjà joué (`ref`), seuls les résultats antérieurs comptent.
+ */
+export function teamForm(team: string, matches: MatchRow[], ref?: MatchRow, n = 5): TeamForm {
   const k = teamKey(team);
   const games = finishedOnly(matches)
-    .filter((m) => (teamKey(m.home_team) === k || teamKey(m.away_team) === k) && (!before || m.updated_at < before))
+    .filter(
+      (m) =>
+        (teamKey(m.home_team) === k || teamKey(m.away_team) === k) &&
+        m.key !== ref?.key &&
+        (!ref || ref.status !== "finished" || m.updated_at < ref.updated_at),
+    )
     .sort((a, b) => a.updated_at.localeCompare(b.updated_at))
     .slice(-n);
   const out: TeamForm = { team, form: [], played: games.length, goalsFor: 0, goalsAgainst: 0 };

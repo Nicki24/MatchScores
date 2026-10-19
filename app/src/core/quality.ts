@@ -128,7 +128,8 @@ export function scoreMethods(input: QualityInput, methods: Method[] = ["B", "C",
     const freshness = { value: lag == null ? 0 : lag <= 60 ? 1 : clamp(1 - (lag - 60) / 240), medianLagSeconds: lag };
 
     const cost = { value: 1, note: "Sur le téléphone : gratuit, sans serveur" };
-    const total = Math.round((6 * exactness.value + 4 * completeness.value + 4 * stability.value + 3 * freshness.value + 3 * cost.value) * 10) / 10;
+    // Sans aucune donnée, la méthode n'est pas évaluable : 0/20
+    const total = access ? Math.round((6 * exactness.value + 4 * completeness.value + 4 * stability.value + 3 * freshness.value + 3 * cost.value) * 10) / 10 : 0;
     const eliminated = !conformity
       ? "Conformité non validée"
       : exactness.errors > 0
