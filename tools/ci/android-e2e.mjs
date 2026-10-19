@@ -2,9 +2,9 @@
 //  1. l'appli ouvre le site de test dans son collecteur (comme bet261) ;
 //  2. l'interface affiche exactement les matchs et cotes 1X2 de la journée en cours ;
 //  3. résultats et classement sont affichés ; captures d'écran à chaque étape.
-import { chromium } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
+import WebSocket from "ws";
 
 const PKG = "mg.matchscores.app";
 const OUT = "android-e2e";
@@ -20,6 +20,43 @@ const screencap = (name) => {
   step(`capture ${name}`);
 };
 const truth = async () => (await fetch("http://localhost:4173/truth.json")).json();
+
+/** Client minimal du protocole de débogage (CDP) d'une WebView Android. */
+function cdp(url) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    let id = 0;
+    const waiting = new Map();
+    ws.on("message", (raw) => {
+      const m = JSON.parse(String(raw));
+      if (m.id && waiting.has(m.id)) {
+        waiting.get(m.id)(m);
+        waiting.delete(m.id);
+      }
+    });
+    ws.on("error", reject);
+    ws.on("open", () =>
+      resolve({
+        async evaluate(expression) {
+          const m = await new Promise((r) => {
+            const n = ++id;
+            waiting.set(n, r);
+            ws.send(JSON.stringify({ id: n, method: "Runtime.evaluate", params: { expression, awaitPromise: true, returnByValue: true } }));
+          });
+          if (m.error || m.result?.exceptionDetails) throw new Error(JSON.stringify(m.error ?? m.result.exceptionDetails));
+          return m.result.result.value;
+        },
+        click(selector) {
+          return this.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) throw new Error("introuvable : ${selector.replace(/"/g, "'")}"); e.click(); return true; })()`);
+        },
+        count(selector) {
+          return this.evaluate(`document.querySelectorAll(${JSON.stringify(selector)}).length`);
+        },
+        close: () => ws.close(),
+      }),
+    );
+  });
+}
 
 async function waitFor(fn, timeout, label) {
   const end = Date.now() + timeout;
@@ -51,30 +88,23 @@ try {
     return m ? { ok: true, name: m[1] } : false;
   }, 60_000, "débogage WebView");
   adb("forward", "tcp:9333", `localabstract:${socket.name}`);
-  const browser = await chromium.connectOverCDP("http://127.0.0.1:9333");
-  step("connecté aux WebViews");
-
-  const pages = async () => browser.contexts().flatMap((c) => c.pages());
-  const ui = (await waitFor(async () => {
-    const p = (await pages()).find((x) => x.url().startsWith("https://appassets.androidplatform.net"));
-    return p ? { ok: true, p } : false;
-  }, 60_000, "interface")).p;
-  await waitFor(async () => {
-    const p = (await pages()).find((x) => x.url().includes("10.0.2.2:4173"));
-    return p ? { ok: true } : false;
-  }, 60_000, "collecteur");
-  step("interface et collecteur chargés");
+  const targets = async () => (await fetch("http://127.0.0.1:9333/json/list")).json();
+  const uiTarget = await waitFor(async () => {
+    const t = (await targets()).find((x) => x.type === "page" && x.url.startsWith("https://appassets.androidplatform.net"));
+    return t ? { ok: true, t } : false;
+  }, 60_000, "interface");
+  await waitFor(async () => ({ ok: (await targets()).some((x) => x.type === "page" && x.url.includes("10.0.2.2:4173")) }), 60_000, "collecteur");
+  const ui = await cdp(uiTarget.t.webSocketDebuggerUrl);
+  step("interface et collecteur chargés", { pages: (await targets()).map((x) => x.url) });
 
   // Les matchs de la journée en cours apparaissent avec les bonnes cotes
   const check = await waitFor(async () => {
     const t = await truth();
-    const cards = await ui.evaluate(() =>
-      [...document.querySelectorAll('[data-testid="match-card"]')].map((e) => ({
+    const cards = await ui.evaluate(`[...document.querySelectorAll('[data-testid="match-card"]')].map((e) => ({
         home: e.querySelector('[data-testid="home"]')?.textContent,
         away: e.querySelector('[data-testid="away"]')?.textContent,
-        odds: ["1", "X", "2"].map((s) => e.querySelector(`[data-testid="odd-${s}"]`)?.textContent).join(" "),
-      })),
-    );
+        odds: ["1", "X", "2"].map((s) => e.querySelector('[data-testid="odd-' + s + '"]')?.textContent).join(" "),
+      }))`);
     const missing = t.matches.filter((m) => !cards.some((c) => c.home === m.home && c.away === m.away && c.odds === m.odds["1X2"].map((o) => o.toFixed(2)).join(" ")));
     return { ok: missing.length === 0, shown: cards.length, expected: t.matches.length, missing: missing.map((m) => `${m.home}-${m.away}`), round: t.round };
   }, 120_000, "matchs affichés");
@@ -88,7 +118,7 @@ try {
 
   await ui.click('[data-testid="tab-results"]');
   const results = await waitFor(async () => {
-    const n = await ui.locator('[data-testid="result-row"]').count();
+    const n = await ui.count('[data-testid="result-row"]');
     return { ok: n >= 10, rows: n };
   }, 60_000, "résultats");
   step("résultats affichés", results);
@@ -96,7 +126,7 @@ try {
 
   await ui.click('[data-testid="tab-standings"]');
   const standings = await waitFor(async () => {
-    const n = await ui.locator('[data-testid="standings"] tbody tr').count();
+    const n = await ui.count('[data-testid="standings"] tbody tr');
     return { ok: n === 20, rows: n };
   }, 60_000, "classement");
   step("classement affiché", standings);
@@ -115,22 +145,15 @@ try {
   await sleep(1000);
   screencap("7-qualite");
 
-  const counts = await ui.evaluate(async () => {
+  const counts = await ui.evaluate(`(async () => {
     const open = indexedDB.open("matchscores");
-    const db = await new Promise((r, j) => {
-      open.onsuccess = () => r(open.result);
-      open.onerror = () => j(open.error);
-    });
-    const count = (store) =>
-      new Promise((r) => {
-        const q = db.transaction(store).objectStore(store).count();
-        q.onsuccess = () => r(q.result);
-      });
+    const db = await new Promise((r, j) => { open.onsuccess = () => r(open.result); open.onerror = () => j(open.error); });
+    const count = (store) => new Promise((r) => { const q = db.transaction(store).objectStore(store).count(); q.onsuccess = () => r(q.result); });
     return { raw: await count("raw_captures"), matches: await count("matches"), odds: await count("odds"), standings: await count("standings") };
-  });
+  })()`);
   step("base locale", counts);
   report.ok = true;
-  await browser.close();
+  ui.close();
 } catch (e) {
   step("ÉCHEC", { error: String(e?.stack ?? e) });
   try {
