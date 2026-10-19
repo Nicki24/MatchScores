@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { applyBatch, ensureSources, ingestCapture, MatchScoresDB, renormalize } from "../../app/src/core/store";
 import { computeTable, marketsOf, teamForm } from "../../app/src/core/analysis";
 import { defaultConfig, VirtualLeague } from "../../app/src/core/sim/engine";
-import { apiResults, apiRound, apiStandings, wsFrames } from "../../tools/mock-site/payloads";
+import { apiResults, apiRound, apiStandings, wsFrames } from "../../app/src/core/sim/payloads";
 
 const T0 = Date.UTC(2026, 0, 1);
 const league = new VirtualLeague(defaultConfig({ startedAt: T0, roundSeconds: 120, liveSeconds: 20 }));

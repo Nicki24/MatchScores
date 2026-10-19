@@ -114,6 +114,8 @@ export interface CycleLog {
   matches: number;
   odds: number;
   standings: number;
+  /** Réponse identique à la précédente : la source a répondu, rien n'a changé. */
+  unchanged?: boolean;
   error?: string;
 }
 

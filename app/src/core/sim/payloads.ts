@@ -3,7 +3,7 @@
  * paris (ce ne sont PAS les formats de bet261, invisibles hors de Madagascar) :
  * l'adaptateur générique doit tous les lire sans configuration.
  */
-import type { SimMatch, SimState } from "../../app/src/core/sim/engine";
+import type { SimMatch, SimState } from "./engine";
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const st = (m: SimMatch) => (m.status === "finished" ? "Finished" : m.status === "live" ? "Live" : "NotStarted");

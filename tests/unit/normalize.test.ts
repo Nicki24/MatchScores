@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeJson, normalizeJsonText } from "../../app/src/core/normalize/json";
 import { normalizeText } from "../../app/src/core/normalize/text";
 import { defaultConfig, VirtualLeague } from "../../app/src/core/sim/engine";
-import { apiResults, apiRound, apiStandings, wsFrames } from "../../tools/mock-site/payloads";
+import { apiResults, apiRound, apiStandings, wsFrames } from "../../app/src/core/sim/payloads";
 
 const league = new VirtualLeague(defaultConfig({ startedAt: Date.UTC(2026, 0, 1), roundSeconds: 120, liveSeconds: 20 }));
 // 5 journées jouées, journée 6 ouverte aux paris

@@ -96,6 +96,17 @@ export async function ingestCapture(
   const capture: RawCapture = { ...input, captured_at: input.captured_at ?? new Date().toISOString(), hash: hash(input.kind + "|" + input.payload) };
   const prev = await db.raw_captures.where("[source_id+hash]").equals([capture.source_id, capture.hash]).last();
   if (prev && Date.parse(capture.captured_at) - Date.parse(prev.captured_at) < DUPLICATE_WINDOW_MS) {
+    await db.cycles.add({
+      source_id: capture.source_id,
+      started_at: capture.captured_at,
+      duration_ms: Date.now() - started,
+      kind: capture.kind,
+      url: capture.url.slice(0, 300),
+      matches: 0,
+      odds: 0,
+      standings: 0,
+      unchanged: true,
+    });
     return { stored: false, duplicate: true, matches: 0, odds: 0, standings: 0 };
   }
   capture.id = await db.raw_captures.add(capture);
@@ -179,8 +190,12 @@ export async function applyBatch(db: MatchScoresDB, sourceId: string, batch: Nor
     for (const o of batch.odds) {
       const matchKey = keys.get(o.external_id) ?? (await db.aliases.get(`${sourceId}|${o.external_id}`))?.key;
       if (!matchKey) continue;
-      const last = await db.odds.where("[match_key+market+selection]").equals([matchKey, o.market, o.selection]).last();
-      // Historique : une ligne par changement de cote (F2)
+      const last = await db.odds
+        .where("[match_key+market+selection]")
+        .equals([matchKey, o.market, o.selection])
+        .filter((x) => x.method === method)
+        .last();
+      // Historique : une ligne par changement de cote et par méthode (F2) — permet de comparer les méthodes entre elles
       if (!last || last.value !== o.value) {
         await db.odds.add({ match_key: matchKey, market: o.market, selection: o.selection, value: o.value, captured_at: capturedAt, method });
       }

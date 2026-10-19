@@ -12,7 +12,7 @@
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { defaultConfig, VirtualLeague, type SimState } from "../../app/src/core/sim/engine";
-import { apiResults, apiRound, apiStandings, truth, wsFrames } from "./payloads";
+import { apiResults, apiRound, apiStandings, truth, wsFrames } from "../../app/src/core/sim/payloads";
 
 const PORT = Number(process.env.PORT ?? 4173);
 const ROUND_SECONDS = Number(process.env.ROUND_SECONDS ?? 120);
