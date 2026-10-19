@@ -1,0 +1,102 @@
+name: Tests et APK
+
+on:
+  push:
+    branches: ["ccr-44d6a258-wowvdx", "main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Dépendances
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Tests unitaires (adaptateurs, base, grille de vérification, relevé)
+        run: npm test
+
+      - name: Construire l'interface et le collecteur
+        run: npm run build:android
+
+      - name: Tests de bout en bout dans Chromium (site de test, 4 modes)
+        run: npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-navigateur
+          path: |
+            playwright-report
+            test-results
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Construire les APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug assembleRelease -PversionCode=${{ github.run_number }}
+
+      - name: Activer KVM (émulateur)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test de l'APK sur un émulateur Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash tools/ci/android-e2e.sh
+
+      - name: Préparer la publication
+        if: always()
+        run: |
+          mkdir -p publish
+          cp android/app/build/outputs/apk/release/app-release.apk publish/MatchScores.apk || true
+          (cd android-e2e 2>/dev/null && zip -qr ../publish/verification-emulateur.zip .) || true
+          (cd test-results/screens 2>/dev/null && zip -qr ../../publish/captures-navigateur.zip .) || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apk-et-verifications
+          path: |
+            publish
+            android-e2e
+
+      - name: Publier l'APK vérifié (release « matchscores-android »)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete exploration --yes --cleanup-tag || true
+          gh release delete matchscores-android --yes --cleanup-tag || true
+          gh release create matchscores-android publish/MatchScores.apk publish/verification-emulateur.zip publish/captures-navigateur.zip \
+            --target "${{ github.sha }}" \
+            --title "MatchScores Android ${{ github.run_number }}" \
+            --notes "APK vérifié automatiquement : tests unitaires, tests navigateur (4 modes de livraison), test de l'APK sur émulateur Android avec le site de test. Télécharge MatchScores.apk sur ton téléphone."

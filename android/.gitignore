@@ -1,0 +1,8 @@
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+# copiés par scripts/copy-android-assets.mjs
+app/src/main/assets/
