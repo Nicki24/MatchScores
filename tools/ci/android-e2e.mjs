@@ -166,7 +166,7 @@ try {
    * Ouvre une autre présentation du site dans le collecteur, puis attend la journée suivante :
    * ses matchs ne peuvent venir que de cette présentation.
    */
-  const phase = async (mode, label, shot) => {
+  const phase = async (mode, label, shot, expected) => {
     const from = (await truth()).round;
     openInCollector(mode);
     await waitFor(async () => ({ ok: (await targets()).some((x) => x.type === "page" && x.url.includes(`mode=${mode}`)) }), 60_000, `page ${mode}`);
@@ -176,21 +176,24 @@ try {
       if (t.round <= from) return { ok: false, waiting: `journée ${t.round}` };
       return shownVsTruth();
     }, 150_000, `${label} : matchs de la journée suivante`);
-    const methods = await idb(`return (await all("matches")).filter((m) => m.round === ${shown.round}).map((m) => m.methods.join("+"));`);
-    if (methods.length < shown.expected) throw new Error(`${label} : ${methods.length} matchs de la journée ${shown.round} en base`);
-    step(`${label} : journée ${shown.round} affichée et identique au site`, { ...shown, methods: [...new Set(methods)] });
+    // Méthodes qui ont vu les matchs de cette journée (le texte affiché arrive quelques secondes après les réponses JSON)
+    const seen = await waitFor(async () => {
+      const methods = await idb(`return (await all("matches")).filter((m) => m.round === ${shown.round}).map((m) => m.methods.join("+"));`);
+      return { ok: methods.length >= shown.expected && methods.every((m) => m === expected), methods: [...new Set(methods)], count: methods.length };
+    }, 30_000, `${label} : matchs vus par ${expected}`);
+    step(`${label} : journée ${shown.round} affichée et identique au site`, { ...shown, methods: seen.methods });
     await screencap(shot);
-    return { ...shown, methods };
   };
 
-  const iframe = await phase("iframe", "iframe d'une autre origine", "8-iframe");
+  // Dans l'iframe : réponses JSON (méthode C) et texte affiché (méthode D)
+  await phase("iframe", "iframe d'une autre origine", "8-iframe", "C+D");
   const fromFrame = await idb(`return (await all("raw_captures")).filter((r) => (r.frame || "").includes("127.0.0.1:4173/provider") && r.items > 0).map((r) => r.kind);`);
-  if (!fromFrame.includes("xhr") || !iframe.methods.every((m) => m.includes("C"))) throw new Error(`iframe : données non relevées dans l'iframe (${JSON.stringify(fromFrame)})`);
-  step("iframe : réponses relevées dans l'iframe", { captures: fromFrame.length });
+  if (!fromFrame.includes("xhr") || !fromFrame.includes("dom")) throw new Error(`iframe : données non relevées dans l'iframe (${JSON.stringify(fromFrame)})`);
+  step("iframe : réponses et texte relevés dans l'iframe", { captures: fromFrame.length, kinds: [...new Set(fromFrame)] });
 
-  const text = await phase("dom", "texte affiché seul", "9-texte");
+  await phase("dom", "texte affiché seul", "9-texte", "D");
   const fromText = await idb(`return (await all("raw_captures")).filter((r) => r.kind === "dom" && (r.frame || "").includes("mode=dom") && r.items > 0).length;`);
-  if (!fromText || !text.methods.every((m) => m === "D")) throw new Error(`texte : lecture inattendue (${fromText} captures, méthodes ${JSON.stringify(text.methods)})`);
+  if (!fromText) throw new Error("texte : aucune lecture du texte affiché");
   step("texte : matchs lus sur l'écran uniquement (méthode D)", { captures: fromText });
 
   // Relevé de diagnostic : enregistré dans Téléchargements/MatchScores puis proposé au partage
@@ -204,7 +207,7 @@ try {
   }, 60_000, "relevé de diagnostic");
   const releve = JSON.parse(adb("shell", "cat", `/sdcard/Download/MatchScores/${saved.name}`));
   step("relevé de diagnostic enregistré", {
-    name: saved.name,
+    file: saved.name,
     endpoints: releve.endpoints.map((e) => `${e.kind} ${e.url} (${e.normalized?.matches ?? 0} matchs)`),
     pages: releve.pages.map((p) => p.frame),
     screenshot: Boolean(releve.screenshot),
