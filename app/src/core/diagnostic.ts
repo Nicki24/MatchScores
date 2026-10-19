@@ -12,18 +12,6 @@ export interface CollectorMeta {
   [k: string]: unknown;
 }
 
-export interface DiagnosticInput {
-  appVersion: string;
-  userAgent: string;
-  collectorUrl?: string;
-  generatedAt?: string;
-  raw: RawCapture[];
-  cycles: CycleLog[];
-  metas: CollectorMeta[];
-  counts: { matches: number; odds: number; standings: number };
-  screenshot?: string;
-}
-
 const LIMITS = { endpoints: 40, sample: 60_000, wsFrames: 15, wsFrame: 8_000, domFrames: 4, dom: 120_000 };
 
 const stripQuery = (u: string) => {
@@ -35,10 +23,69 @@ const stripQuery = (u: string) => {
   }
 };
 
+interface EndpointSummary {
+  kind: RawCapture["kind"];
+  url: string;
+  exampleUrl: string;
+  method?: string;
+  count: number;
+  statuses: Set<number>;
+  firstAt: string;
+  lastAt: string;
+  sampleSize: number;
+  sample: string;
+}
+
+/**
+ * Résumé des captures brutes, construit capture par capture : seuls les comptes et les
+ * derniers échantillons (tronqués) sont gardés, pas les captures elles-mêmes.
+ */
+export class RawSummary {
+  total = 0;
+  readonly endpoints = new Map<string, EndpointSummary>();
+  readonly sockets = new Map<string, { frames: number; samples: string[] }>();
+  readonly pages = new Map<string, { at: string; text: string }>();
+
+  add(r: RawCapture) {
+    this.total++;
+    const url = stripQuery(r.url);
+    if (r.kind === "ws") {
+      const s = this.sockets.get(url) ?? { frames: 0, samples: [] };
+      s.frames++;
+      s.samples.push(r.payload.slice(0, LIMITS.wsFrame));
+      if (s.samples.length > LIMITS.wsFrames) s.samples.shift();
+      this.sockets.set(url, s);
+    } else if (r.kind === "dom") {
+      const frame = r.frame ?? r.url;
+      this.pages.delete(frame);
+      this.pages.set(frame, { at: r.captured_at, text: r.payload.slice(0, LIMITS.dom) });
+    } else {
+      const k = `${r.kind} ${url}`;
+      const e = this.endpoints.get(k) ?? { kind: r.kind, url, exampleUrl: r.url, count: 0, statuses: new Set<number>(), firstAt: r.captured_at, lastAt: r.captured_at, sampleSize: 0, sample: "" };
+      e.count++;
+      if (r.status != null) e.statuses.add(r.status);
+      Object.assign(e, { exampleUrl: r.url, method: r.method, lastAt: r.captured_at, sampleSize: r.payload.length, sample: r.payload.slice(0, LIMITS.sample) });
+      this.endpoints.set(k, e);
+    }
+    return this;
+  }
+}
+
+export interface DiagnosticInput {
+  appVersion: string;
+  userAgent: string;
+  collectorUrl?: string;
+  generatedAt?: string;
+  /** Captures brutes (dans l'ordre d'arrivée), ou leur résumé. */
+  raw: RawCapture[] | RawSummary;
+  cycles: CycleLog[];
+  metas: CollectorMeta[];
+  counts: { matches: number; odds: number; standings: number };
+  screenshot?: string;
+}
+
 export function buildDiagnostic(input: DiagnosticInput) {
-  const nonDom = input.raw.filter((r) => r.kind !== "dom" && r.kind !== "ws");
-  const ws = input.raw.filter((r) => r.kind === "ws");
-  const dom = input.raw.filter((r) => r.kind === "dom");
+  const summary = input.raw instanceof RawSummary ? input.raw : input.raw.reduce((acc, r) => acc.add(r), new RawSummary());
 
   const yieldByUrl = new Map<string, { matches: number; odds: number; standings: number; errors: number }>();
   for (const c of input.cycles) {
@@ -52,44 +99,14 @@ export function buildDiagnostic(input: DiagnosticInput) {
     yieldByUrl.set(k, y);
   }
 
-  const groups = new Map<string, RawCapture[]>();
-  for (const r of nonDom) {
-    const k = `${r.kind} ${stripQuery(r.url)}`;
-    groups.set(k, [...(groups.get(k) ?? []), r]);
-  }
-  const endpoints = [...groups.entries()]
-    .map(([k, rs]) => {
-      const last = rs[rs.length - 1];
-      return {
-        kind: last.kind,
-        url: stripQuery(last.url),
-        exampleUrl: last.url,
-        method: last.method,
-        count: rs.length,
-        statuses: [...new Set(rs.map((r) => r.status).filter((s) => s != null))],
-        firstAt: rs[0].captured_at,
-        lastAt: last.captured_at,
-        normalized: yieldByUrl.get(stripQuery(last.url)) ?? null,
-        sampleSize: last.payload.length,
-        sample: last.payload.slice(0, LIMITS.sample),
-        key: k,
-      };
-    })
+  const endpoints = [...summary.endpoints.entries()]
+    .map(([key, e]) => ({ ...e, statuses: [...e.statuses], normalized: yieldByUrl.get(e.url) ?? null, key }))
     .sort((a, b) => (b.normalized?.matches ?? 0) - (a.normalized?.matches ?? 0) || b.count - a.count)
     .slice(0, LIMITS.endpoints);
 
-  const sockets = new Map<string, RawCapture[]>();
-  for (const r of ws) sockets.set(stripQuery(r.url), [...(sockets.get(stripQuery(r.url)) ?? []), r]);
-  const websockets = [...sockets.entries()].map(([url, rs]) => ({
-    url,
-    frames: rs.length,
-    normalized: yieldByUrl.get(url) ?? null,
-    samples: rs.slice(-LIMITS.wsFrames).map((r) => r.payload.slice(0, LIMITS.wsFrame)),
-  }));
+  const websockets = [...summary.sockets.entries()].map(([url, s]) => ({ url, frames: s.frames, normalized: yieldByUrl.get(url) ?? null, samples: s.samples }));
 
-  const frames = new Map<string, RawCapture>();
-  for (const r of dom) frames.set(r.frame ?? r.url, r);
-  const pages = [...frames.entries()].slice(-LIMITS.domFrames).map(([frame, r]) => ({ frame, at: r.captured_at, text: r.payload.slice(0, LIMITS.dom) }));
+  const pages = [...summary.pages.entries()].slice(-LIMITS.domFrames).map(([frame, p]) => ({ frame, at: p.at, text: p.text }));
 
   const metas = new Map<string, CollectorMeta>();
   for (const m of input.metas) metas.set(`${m.what} ${m.url}`, m);
@@ -99,7 +116,7 @@ export function buildDiagnostic(input: DiagnosticInput) {
     generatedAt: input.generatedAt ?? new Date().toISOString(),
     app: { version: input.appVersion, userAgent: input.userAgent },
     collector: { url: input.collectorUrl, events: [...metas.values()].slice(-200) },
-    totals: { ...input.counts, rawCaptures: input.raw.length, cycles: input.cycles.length, errors: input.cycles.filter((c) => c.error).length },
+    totals: { ...input.counts, rawCaptures: summary.total, cycles: input.cycles.length, errors: input.cycles.filter((c) => c.error).length },
     endpoints,
     websockets,
     pages,

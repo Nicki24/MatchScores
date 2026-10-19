@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyBatch, ensureSources, ingestCapture, MatchScoresDB, renormalize } from "../../app/src/core/store";
+import { applyBatch, ensureSources, ingestCapture, MatchScoresDB, pruneStorage, renormalize } from "../../app/src/core/store";
 import { computeTable, marketsOf, teamForm } from "../../app/src/core/analysis";
 import { defaultConfig, VirtualLeague } from "../../app/src/core/sim/engine";
 import { apiResults, apiRound, apiStandings, wsFrames } from "../../app/src/core/sim/payloads";
@@ -54,7 +54,7 @@ describe("base locale", () => {
     const s = league.state(now);
     const payload = JSON.stringify(apiRound(s));
     expect((await capture("xhr", payload, now)).stored).toBe(true);
-    expect((await capture("xhr", payload, now + 3000)).duplicate).toBe(true);
+    expect((await capture("xhr", payload, now + 3000)).unchanged).toBe(true);
     const changed = apiRound(s);
     changed.events[0].markets[0].selections[0].odds = "9.99";
     await capture("xhr", JSON.stringify(changed), now + 6000);
@@ -62,6 +62,19 @@ describe("base locale", () => {
     const history = (await db.odds.where("match_key").equals(key).toArray()).filter((o) => o.market === "1X2" && o.selection === "1");
     expect(history.map((h) => h.value)).toEqual([s.matches[0].odds["1X2"][0], 9.99]);
     expect(marketsOf(await db.odds.where("match_key").equals(key).toArray())[0].selections[0].value).toBe(9.99);
+  });
+
+  it("reprend une cote revenue à sa valeur précédente", async () => {
+    const now = T0 + (5 * 120 + 30) * 1000;
+    const s = league.state(now);
+    const payload = JSON.stringify(apiRound(s));
+    const changed = apiRound(s);
+    changed.events[0].markets[0].selections[0].odds = "9.99";
+    await capture("xhr", payload, now);
+    await capture("xhr", JSON.stringify(changed), now + 3000);
+    expect((await capture("xhr", payload, now + 6000)).stored).toBe(true);
+    const odds = await db.odds.where("match_key").equals(`bet261|${s.matches[0].id}`).toArray();
+    expect(marketsOf(odds)[0].selections[0].value).toBe(s.matches[0].odds["1X2"][0]);
   });
 
   it("met à jour le statut et le score quand le match se termine (F3)", async () => {
@@ -99,6 +112,59 @@ describe("base locale", () => {
     await renormalize(db);
     const after = (await db.matches.toArray()).map((m) => m.key).sort();
     expect(after).toEqual(before);
+  });
+
+  it("n'enregistre pas une page dont seul le compte à rebours change", async () => {
+    const now = T0 + (5 * 120 + 30) * 1000;
+    const page = (ms: number) => `Prochaine journée dans ${60 - Math.round((ms - now) / 1000)} s\n${domText(now)}`;
+    const first = await capture("dom", page(now), now, "https://site/virtual");
+    expect(first).toMatchObject({ stored: true, unchanged: false });
+    expect(first.matches).toBeGreaterThan(0);
+    const later = [];
+    for (let i = 1; i <= 24; i++) later.push(await capture("dom", page(now + i * 2500), now + i * 2500, "https://site/virtual"));
+    expect(later.every((r) => !r.stored && r.unchanged)).toBe(true);
+    expect(await db.raw_captures.count()).toBe(1);
+    // Journal : une ligne « inchangé » par minute, pas une par capture
+    const quiet = (await db.cycles.toArray()).filter((c) => c.unchanged);
+    expect(quiet.length).toBeLessThanOrEqual(2);
+    // Une cote change : la lecture est de nouveau enregistrée
+    const s = league.state(now);
+    const changed = page(now + 70_000).replace(s.matches[0].odds["1X2"][0].toFixed(2), "9.99");
+    expect((await capture("dom", changed, now + 70_000, "https://site/virtual")).stored).toBe(true);
+    expect(await db.raw_captures.count()).toBe(2);
+  });
+
+  it("garde des échantillons des réponses illisibles, sans les compter comme des données", async () => {
+    const t = T0 + 3600_000;
+    const results = [];
+    // Une réponse sans match, qui change à chaque fois (heure du serveur), toutes les 3 s pendant 5 min
+    for (let i = 0; i < 100; i++) results.push(await capture("xhr", JSON.stringify({ serverTime: t + i * 3000, menu: ["Sports", "Virtuels"] }), t + i * 3000, "https://site/api/config?ts=" + i));
+    expect(results.every((r) => !r.unchanged && r.matches === 0)).toBe(true);
+    const kept = await db.raw_captures.count();
+    expect(kept).toBeGreaterThanOrEqual(2);
+    expect(kept).toBeLessThanOrEqual(3);
+    // Un autre type de message sur la même adresse est gardé lui aussi
+    expect((await capture("xhr", JSON.stringify({ banner: "Promo" }), t + 300_500, "https://site/api/config")).stored).toBe(true);
+    // Un doublon exact d'une réponse illisible n'est pas une donnée
+    expect((await capture("xhr", JSON.stringify({ banner: "Promo" }), t + 301_000, "https://site/api/config")).unchanged).toBe(false);
+  });
+
+  it("re-normalise sans effacer ce qui précède les captures conservées", async () => {
+    await applyBatch(db, "bet261", { matches: [{ external_id: "old", home_team: "Leeds", away_team: "Burnley", round: 3, status: "finished", home_score: 1, away_score: 0 }], odds: [], standings: [] }, "C", at(T0 - 86400_000));
+    const now = T0 + (5 * 120 + 30) * 1000;
+    await capture("xhr", JSON.stringify(apiRound(league.state(now))), now);
+    await renormalize(db);
+    expect(await db.matches.get("bet261|old")).toBeTruthy();
+    expect(await db.matches.count()).toBe(11);
+  });
+
+  it("limite la place prise par les captures brutes", async () => {
+    const t = Date.now();
+    for (let i = 0; i < 30; i++) await db.raw_captures.add({ source_id: "bet261", kind: "xhr", url: "https://site/api", payload: "{}", captured_at: new Date(t - i * 3600_000).toISOString(), hash: String(i) });
+    await pruneStorage(db, { rawDays: 1, maxRaw: 10 });
+    const left = await db.raw_captures.toArray();
+    expect(left).toHaveLength(10);
+    expect(left.every((r) => Date.parse(r.captured_at) > t - 86400_000)).toBe(true);
   });
 
   it("ne confond pas un même duel de deux saisons différentes", async () => {

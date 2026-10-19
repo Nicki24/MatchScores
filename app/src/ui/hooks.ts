@@ -2,7 +2,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useState } from "react";
 import { db } from "../db";
 import { setSetting } from "../core/store";
-import type { MatchRow, OddsRow } from "../core/types";
+import type { MatchRow, OddsRow, StandingRow } from "../core/types";
 
 /** Source affichée : réglage, sinon celle qui a des données (bet261 en priorité). */
 export function useViewSource(): [string, (id: string) => void] {
@@ -21,12 +21,32 @@ export function useSetting<T>(key: string, fallback: T): [T, (v: T) => void] {
   return [(row?.value as T | undefined) ?? fallback, (v: T) => setSetting(db, key, v)];
 }
 
-/** Matchs d'une source (les plus récents), mis à jour en direct. */
+/** Matchs d'une source (les plus récents d'abord), mis à jour en direct. */
 export function useMatches(source: string, limit = 600): MatchRow[] | undefined {
+  return useLiveQuery(
+    () =>
+      db.matches
+        .orderBy("updated_at")
+        .reverse()
+        .filter((m) => m.source_id === source)
+        .limit(limit)
+        .toArray(),
+    [source, limit],
+  );
+}
+
+/** Dernier classement enregistré d'une source (même ligue, saison et journée), trié par position. */
+export function useLatestStandings(source: string): StandingRow[] | undefined {
   return useLiveQuery(async () => {
-    const all = await db.matches.where("source_id").equals(source).toArray();
-    return all.sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, limit);
-  }, [source, limit]);
+    const last = await db.standings
+      .orderBy("captured_at")
+      .reverse()
+      .filter((r) => r.source_id === source)
+      .first();
+    if (!last) return [];
+    const rows = await db.standings.where("[source_id+league+season]").equals([source, last.league, last.season]).toArray();
+    return rows.filter((r) => r.round === last.round).sort((a, b) => a.position - b.position);
+  }, [source]);
 }
 
 export function useOddsFor(keys: string[]): Map<string, OddsRow[]> | undefined {

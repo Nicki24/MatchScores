@@ -2,7 +2,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { Check, X } from "lucide-react";
 import { useState } from "react";
 import { db } from "../db";
-import { buildDiagnostic, diagnosticFileName } from "../core/diagnostic";
+import { buildDiagnostic, diagnosticFileName, RawSummary } from "../core/diagnostic";
 import { marketsOf } from "../core/analysis";
 import { METHOD_LABELS, retainedMethod, scoreMethods, type MethodScore } from "../core/quality";
 import { renormalize, setSetting } from "../core/store";
@@ -12,13 +12,24 @@ import { Button, Card, cx, Empty, fmtDateTime, fmtTime, Pill, Section, Toggle } 
 
 const pct = (v: number) => `${Math.round(v * 100)} %`;
 
+/** Données des dernières 24 heures : la grille porte sur la période de test en cours. */
 async function sourceData(source: string) {
-  const prefix = `${source}|`;
+  const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const matches = await db.matches
+    .where("updated_at")
+    .above(since)
+    .filter((m) => m.source_id === source)
+    .toArray();
+  const keys = matches.map((m) => m.key);
   return {
-    matches: await db.matches.where("source_id").equals(source).toArray(),
-    odds: await db.odds.filter((o) => o.match_key.startsWith(prefix)).toArray(),
-    cycles: await db.cycles.where("source_id").equals(source).toArray(),
-    checks: (await db.checks.toArray()).filter((c) => c.match_key.startsWith(prefix)),
+    matches,
+    odds: keys.length ? await db.odds.where("match_key").anyOf(keys).toArray() : [],
+    cycles: await db.cycles
+      .where("started_at")
+      .above(since)
+      .filter((c) => c.source_id === source)
+      .toArray(),
+    checks: keys.length ? await db.checks.where("match_key").anyOf(keys).toArray() : [],
   };
 }
 
@@ -205,8 +216,18 @@ export function SettingsPage() {
   const createDiagnostic = async () => {
     setProgress("Préparation du relevé…");
     const since = new Date(Date.now() - 6 * 3600_000).toISOString();
-    const raw = (await db.raw_captures.where("captured_at").above(since).toArray()).filter((r) => r.source_id === "bet261");
-    const cycles = (await db.cycles.where("started_at").above(since).toArray()).filter((c) => c.source_id === "bet261");
+    const raw = new RawSummary();
+    await db.raw_captures
+      .where("captured_at")
+      .above(since)
+      .each((r) => {
+        if (r.source_id === "bet261") raw.add(r);
+      });
+    const cycles = await db.cycles
+      .where("started_at")
+      .above(since)
+      .filter((c) => c.source_id === "bet261")
+      .toArray();
     const screenshot = withShot ? await requestCollectorShot() : undefined;
     const report = buildDiagnostic({
       appVersion: `${APP_VERSION}${rt.nativeVersion ? ` (Android ${rt.nativeVersion})` : ""}`,
@@ -273,7 +294,7 @@ export function SettingsPage() {
       <Section title="Données">
         <Card className="space-y-3 p-4">
           <div className="text-xs text-slate-400 tabular">
-            {counts?.raw ?? 0} captures brutes (7 jours) · {counts?.matches ?? 0} matchs · {counts?.odds ?? 0} cotes · {counts?.standings ?? 0} lignes de classement
+            {counts?.raw ?? 0} captures brutes (3 jours au plus) · {counts?.matches ?? 0} matchs · {counts?.odds ?? 0} cotes · {counts?.standings ?? 0} lignes de classement
           </div>
           <Button
             className="w-full"
@@ -293,6 +314,7 @@ export function SettingsPage() {
             onClick={async () => {
               if (!confirm("Effacer toutes les données collectées ?")) return;
               await Promise.all([db.raw_captures.clear(), db.matches.clear(), db.aliases.clear(), db.odds.clear(), db.standings.clear(), db.cycles.clear(), db.checks.clear()]);
+              db.streams.clear();
               await setSetting(db, "viewSource", "bet261");
               toast("Données effacées");
             }}

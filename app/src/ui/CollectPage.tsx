@@ -15,7 +15,6 @@ export function CollectPage({ onDemo }: { onDemo: () => void }) {
     const cycles = await db.cycles.where("started_at").above(today).toArray();
     const real = cycles.filter((c) => c.kind !== "timer" && c.source_id === "bet261");
     return {
-      captures: real.length,
       withData: real.filter((c) => c.matches + c.odds + c.standings > 0).length,
       matches: await db.matches.where("source_id").equals("bet261").count(),
     };
@@ -71,12 +70,12 @@ export function CollectPage({ onDemo }: { onDemo: () => void }) {
         </Button>
         <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs text-slate-400">
           <div className="rounded-xl bg-white/5 p-2">
-            <div className="text-lg font-bold text-slate-100 tabular">{stats?.captures ?? 0}</div>
-            réponses aujourd'hui
+            <div className="text-lg font-bold text-slate-100 tabular">{rt.captures}</div>
+            réponses reçues
           </div>
           <div className="rounded-xl bg-white/5 p-2">
             <div className="text-lg font-bold text-slate-100 tabular">{stats?.withData ?? 0}</div>
-            avec des matchs
+            avec du nouveau
           </div>
           <div className="rounded-xl bg-white/5 p-2">
             <div className="text-lg font-bold text-slate-100 tabular">{stats?.matches ?? 0}</div>

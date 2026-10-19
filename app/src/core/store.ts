@@ -6,6 +6,7 @@ import Dexie, { type Table } from "dexie";
 import { adapterFor } from "./normalize/adapters";
 import { hash, teamKey } from "./normalize/util";
 import {
+  emptyBatch,
   KIND_METHOD,
   type CaptureKind,
   type CycleLog,
@@ -34,6 +35,17 @@ export interface Setting {
   value: unknown;
 }
 
+/** Ce que la base retient en mémoire de chaque flux (une adresse sans paramètres, ou une page pour le texte). */
+interface StreamState {
+  /** Empreinte de la dernière lecture enregistrée et son heure. */
+  sig?: string;
+  storedAt?: number;
+  /** Réponses où rien n'est reconnu : dernière gardée, par forme de contenu. */
+  emptyAt: Map<string, number>;
+  /** Minute de la dernière ligne de journal « inchangé » et « rien de reconnu ». */
+  quietMinute: { unchanged?: string; empty?: string };
+}
+
 export class MatchScoresDB extends Dexie {
   sources!: Table<Source, string>;
   raw_captures!: Table<RawCapture, number>;
@@ -44,6 +56,8 @@ export class MatchScoresDB extends Dexie {
   cycles!: Table<CycleLog, number>;
   checks!: Table<Check, string>;
   settings!: Table<Setting, string>;
+  /** État des flux depuis le lancement (non enregistré). */
+  readonly streams = new Map<string, StreamState>();
 
   constructor(name = "matchscores") {
     super(name);
@@ -73,11 +87,32 @@ export async function ensureSources(db: MatchScoresDB) {
 const STATUS_ORDER: Record<MatchStatus, number> = { scheduled: 0, live: 1, finished: 2 };
 /** Durée maximale pendant laquelle un même couple d'équipes sans journée/heure est considéré comme le même match. */
 const SAME_MATCH_WINDOW_MS = 60 * 60 * 1000;
-const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
+/** Une lecture identique à la précédente du même flux n'est ré-enregistrée qu'après ce délai. */
+const UNCHANGED_WINDOW_MS = 10 * 60 * 1000;
+/** Réponse où rien n'est reconnu : un exemplaire par flux et par forme de contenu suffit sur cette durée (relevé, F7). */
+const EMPTY_KEEP_MS = 2 * 60 * 1000;
+
+const urlPath = (u: string) => {
+  try {
+    const x = new URL(u);
+    return x.origin + x.pathname;
+  } catch {
+    return u.split("?")[0];
+  }
+};
+
+/** Flux d'une capture : même adresse sans paramètres ou, pour le texte affiché, même page. */
+export const streamOf = (c: Pick<RawCapture, "source_id" | "kind" | "url" | "frame">) =>
+  `${c.source_id}|${c.kind}|${urlPath(c.kind === "dom" ? (c.frame ?? c.url) : c.url)}`;
+
+/** Forme d'un contenu : son début, chiffres effacés (deux messages du même type ont la même forme). */
+const shapeOf = (payload: string) => hash(payload.slice(0, 200).replace(/\d+/g, "#"));
 
 export interface IngestResult {
+  /** Capture brute enregistrée dans raw_captures. */
   stored: boolean;
-  duplicate: boolean;
+  /** Même lecture que la dernière enregistrée : la source a répondu, ses données sont déjà prises en compte. */
+  unchanged: boolean;
   matches: number;
   odds: number;
   standings: number;
@@ -85,8 +120,9 @@ export interface IngestResult {
 }
 
 /**
- * Enregistre une capture brute puis la normalise (cycle complet).
- * Une capture identique à une capture récente n'est pas ré-enregistrée.
+ * Lit une capture puis l'enregistre (cycle complet). Pour ménager le téléphone, la capture brute
+ * n'est gardée que si sa lecture apporte du nouveau : une page dont seul un compte à rebours change
+ * n'est pas ré-enregistrée toutes les 2 secondes. Les réponses illisibles sont gardées par échantillons.
  */
 export async function ingestCapture(
   db: MatchScoresDB,
@@ -94,42 +130,63 @@ export async function ingestCapture(
 ): Promise<IngestResult> {
   const started = Date.now();
   const capture: RawCapture = { ...input, captured_at: input.captured_at ?? new Date().toISOString(), hash: hash(input.kind + "|" + input.payload) };
-  const prev = await db.raw_captures.where("[source_id+hash]").equals([capture.source_id, capture.hash]).last();
-  if (prev && Date.parse(capture.captured_at) - Date.parse(prev.captured_at) < DUPLICATE_WINDOW_MS) {
-    await db.cycles.add({
+  const at = Date.parse(capture.captured_at);
+  const stream = streamOf(capture);
+  const st = db.streams.get(stream) ?? { emptyAt: new Map<string, number>(), quietMinute: {} };
+  db.streams.set(stream, st);
+  const log = (counts: { matches: number; odds: number; standings: number }, extra: { unchanged?: boolean; error?: string } = {}) =>
+    db.cycles.add({
       source_id: capture.source_id,
       started_at: capture.captured_at,
       duration_ms: Date.now() - started,
       kind: capture.kind,
       url: capture.url.slice(0, 300),
-      matches: 0,
-      odds: 0,
-      standings: 0,
-      unchanged: true,
+      ...counts,
+      ...extra,
     });
-    return { stored: false, duplicate: true, matches: 0, odds: 0, standings: 0 };
-  }
-  capture.id = await db.raw_captures.add(capture);
-  let batch: NormalizedBatch = { matches: [], odds: [], standings: [] };
+  const quiet = async (unchanged: boolean, error?: string): Promise<IngestResult> => {
+    // Journal (NF3) : une ligne par flux et par minute quand rien de nouveau n'arrive
+    const minute = capture.captured_at.slice(0, 16);
+    const kind = unchanged ? "unchanged" : "empty";
+    if (st.quietMinute[kind] !== minute) {
+      st.quietMinute[kind] = minute;
+      await log({ matches: 0, odds: 0, standings: 0 }, { unchanged: unchanged || undefined, error });
+    }
+    return { stored: false, unchanged, matches: 0, odds: 0, standings: 0, error };
+  };
+
+  let batch: NormalizedBatch = emptyBatch();
   let error: string | undefined;
   try {
     batch = adapterFor(capture.source_id)(capture);
-    await applyBatch(db, capture.source_id, batch, KIND_METHOD[capture.kind], capture.captured_at);
   } catch (e) {
     error = (e as Error).message;
   }
-  await db.cycles.add({
-    source_id: capture.source_id,
-    started_at: capture.captured_at,
-    duration_ms: Date.now() - started,
-    kind: capture.kind,
-    url: capture.url.slice(0, 300),
-    matches: batch.matches.length,
-    odds: batch.odds.length,
-    standings: batch.standings.length,
-    error,
-  });
-  return { stored: true, duplicate: false, matches: batch.matches.length, odds: batch.odds.length, standings: batch.standings.length, error };
+  const items = batch.matches.length + batch.odds.length + batch.standings.length;
+  const sig = items ? hash(capture.kind + "|" + JSON.stringify(batch)) : undefined;
+  // Même lecture que la dernière enregistrée pour ce flux (seul un compte à rebours a changé, par exemple)
+  if (sig && sig === st.sig && st.storedAt != null && at - st.storedAt < UNCHANGED_WINDOW_MS) return quiet(true);
+  if (!items) {
+    const shape = shapeOf(capture.payload);
+    const last = st.emptyAt.get(shape);
+    if (last != null && at - last < EMPTY_KEEP_MS) return quiet(false, error);
+    if (st.emptyAt.size > 200) st.emptyAt.clear();
+    st.emptyAt.set(shape, at);
+  }
+
+  capture.items = items;
+  try {
+    capture.id = await db.raw_captures.add(capture);
+    if (items) {
+      await applyBatch(db, capture.source_id, batch, KIND_METHOD[capture.kind], capture.captured_at);
+      st.sig = sig;
+      st.storedAt = at;
+    }
+  } catch (e) {
+    error = (e as Error).message;
+  }
+  await log({ matches: batch.matches.length, odds: batch.odds.length, standings: batch.standings.length }, { error });
+  return { stored: capture.id != null, unchanged: false, matches: batch.matches.length, odds: batch.odds.length, standings: batch.standings.length, error };
 }
 
 function sameMatch(existing: MatchRow, m: MatchInput, capturedAt: string): boolean {
@@ -242,29 +299,48 @@ async function latestFinishedRound(db: MatchScoresDB, sourceId: string) {
   return m[0]?.round;
 }
 
-/** F7 : re-normalise toutes les captures brutes après une correction d'adaptateur. */
+/**
+ * F7 : re-normalise les captures brutes conservées après une correction d'adaptateur.
+ * Ce qui précède la plus ancienne capture conservée est gardé tel quel.
+ */
 export async function renormalize(db: MatchScoresDB, onProgress?: (done: number, total: number) => void) {
-  await db.transaction("rw", [db.matches, db.aliases, db.odds, db.standings], async () => {
-    await Promise.all([db.matches.clear(), db.aliases.clear(), db.odds.clear(), db.standings.clear()]);
-  });
+  const oldest = await db.raw_captures.orderBy("captured_at").first();
   const total = await db.raw_captures.count();
+  if (!oldest) return;
+  const since = oldest.captured_at;
+  await db.transaction("rw", [db.matches, db.aliases, db.odds, db.standings], async () => {
+    const keys = await db.matches.where("first_seen_at").aboveOrEqual(since).primaryKeys();
+    const removed = new Set(keys);
+    await db.odds.where("match_key").anyOf(keys).delete();
+    await db.matches.bulkDelete(keys);
+    await db.aliases.filter((a) => removed.has(a.key)).delete();
+    await db.standings.where("captured_at").aboveOrEqual(since).delete();
+  });
+  // Par paquets : les captures ne tiennent pas toutes en mémoire
   let done = 0;
-  const all = await db.raw_captures.orderBy("id").toArray();
-  for (const c of all) {
-    try {
-      await applyBatch(db, c.source_id, adapterFor(c.source_id)(c), KIND_METHOD[c.kind], c.captured_at);
-    } catch {
-      /* capture illisible : ignorée */
+  let lastId = 0;
+  for (;;) {
+    const chunk = await db.raw_captures.where("id").above(lastId).limit(100).toArray();
+    if (!chunk.length) break;
+    for (const c of chunk) {
+      try {
+        await applyBatch(db, c.source_id, adapterFor(c.source_id)(c), KIND_METHOD[c.kind], c.captured_at);
+      } catch {
+        /* capture illisible : ignorée */
+      }
+      onProgress?.(++done, total);
     }
-    onProgress?.(++done, total);
+    lastId = chunk[chunk.length - 1].id!;
   }
 }
 
-/** Conservation limitée des captures brutes (place sur le téléphone). */
-export async function pruneRawCaptures(db: MatchScoresDB, days = 7) {
-  const limit = new Date(Date.now() - days * 86400_000).toISOString();
-  await db.raw_captures.where("captured_at").below(limit).delete();
-  await db.cycles.where("started_at").below(limit).delete();
+/** Conservation limitée (place sur le téléphone) : captures brutes 3 jours et 3 000 au plus, journal 7 jours. */
+export async function pruneStorage(db: MatchScoresDB, { rawDays = 3, maxRaw = 3000, cycleDays = 7 } = {}) {
+  const before = (days: number) => new Date(Date.now() - days * 86400_000).toISOString();
+  await db.raw_captures.where("captured_at").below(before(rawDays)).delete();
+  const excess = (await db.raw_captures.count()) - maxRaw;
+  if (excess > 0) await db.raw_captures.bulkDelete(await db.raw_captures.orderBy("id").limit(excess).primaryKeys());
+  await db.cycles.where("started_at").below(before(cycleDays)).delete();
 }
 
 export async function getSetting<T>(db: MatchScoresDB, key: string, fallback: T): Promise<T> {

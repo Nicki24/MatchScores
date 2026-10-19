@@ -4,7 +4,7 @@ import { db } from "../db";
 import { computeTable, favourite, headToHead, marketLabel, marketsOf, pct, selectionLabel, teamForm } from "../core/analysis";
 import { teamKey } from "../core/normalize/util";
 import type { MatchRow } from "../core/types";
-import { useMatches, useOddsFor, useTick, useViewSource } from "./hooks";
+import { useLatestStandings, useMatches, useOddsFor, useTick, useViewSource } from "./hooks";
 import { Button, Card, Empty, FormChips, fmtDateTime, fmtTime, Pill, ProbBar, Section } from "./kit";
 
 const COLORS: Record<string, string> = { "1": "#34d399", X: "#94a3b8", "2": "#22d3ee" };
@@ -193,12 +193,7 @@ export function ResultsPage({ onOpen }: { onOpen: (key: string) => void }) {
 
 export function StandingsPage() {
   const [source] = useViewSource();
-  const latest = useLiveQuery(async () => {
-    const rows = await db.standings.where("[source_id+league+season]").between([source, "", ""], [source, "￿", "￿"]).toArray();
-    if (!rows.length) return [];
-    const last = rows.reduce((a, r) => (r.captured_at > a.captured_at ? r : a));
-    return rows.filter((r) => r.league === last.league && r.season === last.season && r.round === last.round).sort((a, b) => a.position - b.position);
-  }, [source]);
+  const latest = useLatestStandings(source);
   const matches = useMatches(source);
   const computed = latest && latest.length === 0 && matches ? computeTable(matches) : [];
   const rows = latest?.length
@@ -251,7 +246,7 @@ export function MatchDetail({ matchKey, onClose }: { matchKey: string; onClose: 
   const m = useLiveQuery(() => db.matches.get(matchKey), [matchKey]);
   const odds = useLiveQuery(() => db.odds.where("match_key").equals(matchKey).toArray(), [matchKey]);
   const all = useMatches(m?.source_id ?? "", 2000);
-  const standings = useLiveQuery(async () => (m ? db.standings.where("source_id").equals(m.source_id).toArray() : []), [m?.source_id]);
+  const standings = useLatestStandings(m?.source_id ?? "");
   if (!m) return null;
   const markets = marketsOf(odds ?? []);
   const forms = [teamForm(m.home_team, all ?? [], m), teamForm(m.away_team, all ?? [], m)];
@@ -334,7 +329,7 @@ export function MatchDetail({ matchKey, onClose }: { matchKey: string; onClose: 
               <div key={f.team} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
                 <span className="truncate font-medium">{f.team}</span>
                 <span className="flex items-center gap-2 text-xs text-slate-400 tabular">
-                  {f.played ? `${f.goalsFor} buts marqués · ${f.goalsAgainst} encaissés` : "pas encore de résultat"}
+                  {f.played ? `${f.goalsFor} but${f.goalsFor > 1 ? "s" : ""} marqué${f.goalsFor > 1 ? "s" : ""} · ${f.goalsAgainst} encaissé${f.goalsAgainst > 1 ? "s" : ""}` : "pas encore de résultat"}
                   <FormChips form={f.form} />
                 </span>
               </div>

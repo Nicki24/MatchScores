@@ -38,7 +38,7 @@ export function marketsOf(rows: OddsRow[]): MarketOdds[] {
   for (const r of [...rows].sort((a, b) => a.captured_at.localeCompare(b.captured_at))) {
     const m = byMarket.get(r.market) ?? new Map<string, OddsPoint[]>();
     const h = m.get(r.selection) ?? [];
-    h.push({ value: r.value, at: r.captured_at });
+    if (h.length === 0 || h[h.length - 1].value !== r.value) h.push({ value: r.value, at: r.captured_at });
     m.set(r.selection, h);
     byMarket.set(r.market, m);
   }

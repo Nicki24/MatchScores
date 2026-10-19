@@ -42,6 +42,8 @@ export interface RawCapture {
   captured_at: string;
   /** Empreinte du contenu, pour ignorer les doublons exacts. */
   hash: string;
+  /** Nombre d'éléments lus (matchs + cotes + classement) à l'enregistrement. */
+  items?: number;
 }
 
 export type MatchStatus = "scheduled" | "live" | "finished";

@@ -1,21 +1,25 @@
 // Vérifie l'APK réel sur l'émulateur Android :
 //  1. l'appli ouvre le site de test dans son collecteur (comme bet261) ;
 //  2. l'interface affiche exactement les matchs et cotes 1X2 de la journée en cours ;
-//  3. résultats et classement sont affichés ; captures d'écran à chaque étape.
+//  3. résultats et classement sont affichés ; captures d'écran à chaque étape ;
+//  4. même vérification quand les matchs viennent d'une iframe d'une autre origine, puis du texte affiché seul ;
+//  5. le relevé de diagnostic est enregistré dans Téléchargements/MatchScores.
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import WebSocket from "ws";
 
 const PKG = "mg.matchscores.app";
 const OUT = "android-e2e";
-const adb = (...args) => execFileSync("adb", args, { encoding: "utf8" }).trim();
+const adb = (...args) => execFileSync("adb", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const report = { steps: [], ok: false };
 const step = (name, data = {}) => {
   report.steps.push({ name, at: new Date().toISOString(), ...data });
   console.log("•", name, JSON.stringify(data));
 };
-const screencap = (name) => {
+const screencap = async (name) => {
+  // Laisse la WebView finir son rendu avant la capture
+  await sleep(2500);
   writeFileSync(`${OUT}/${name}.png`, execFileSync("adb", ["exec-out", "screencap", "-p"]));
   step(`capture ${name}`);
 };
@@ -73,9 +77,13 @@ async function waitFor(fn, timeout, label) {
   throw new Error(`${label} : délai dépassé (${JSON.stringify(last)})`);
 }
 
+const openInCollector = (mode) => adb("shell", "am", "start", "-n", `${PKG}/.MainActivity`, "--es", "collectorUrl", `'http://10.0.2.2:4173/virtual?mode=${mode}'`);
+
 try {
   adb("shell", "am", "force-stop", PKG);
-  adb("shell", "am", "start", "-n", `${PKG}/.MainActivity`, "--es", "collectorUrl", "'http://10.0.2.2:4173/virtual?mode=api'");
+  // Le jeu en iframe vient d'une autre origine (127.0.0.1:4173), relayée vers le site de test de la machine hôte
+  adb("reverse", "tcp:4173", "tcp:4173");
+  openInCollector("api");
   step("appli lancée");
 
   const pid = await waitFor(async () => {
@@ -97,8 +105,18 @@ try {
   const ui = await cdp(uiTarget.t.webSocketDebuggerUrl);
   step("interface et collecteur chargés", { pages: (await targets()).map((x) => x.url) });
 
-  // Les matchs de la journée en cours apparaissent avec les bonnes cotes
-  const check = await waitFor(async () => {
+  /** Base locale de l'appli, lue depuis l'interface. */
+  const idb = (body) =>
+    ui.evaluate(`(async () => {
+      const open = indexedDB.open("matchscores");
+      const db = await new Promise((r, j) => { open.onsuccess = () => r(open.result); open.onerror = () => j(open.error); });
+      const all = (store) => new Promise((r) => { const q = db.transaction(store).objectStore(store).getAll(); q.onsuccess = () => r(q.result); });
+      const count = (store) => new Promise((r) => { const q = db.transaction(store).objectStore(store).count(); q.onsuccess = () => r(q.result); });
+      try { ${body} } finally { db.close(); }
+    })()`);
+
+  /** Les matchs de la journée en cours sont-ils tous affichés, avec les bonnes cotes 1X2 ? */
+  const shownVsTruth = async () => {
     const t = await truth();
     const cards = await ui.evaluate(`[...document.querySelectorAll('[data-testid="match-card"]')].map((e) => ({
         home: e.querySelector('[data-testid="home"]')?.textContent,
@@ -107,13 +125,15 @@ try {
       }))`);
     const missing = t.matches.filter((m) => !cards.some((c) => c.home === m.home && c.away === m.away && c.odds === m.odds["1X2"].map((o) => o.toFixed(2)).join(" ")));
     return { ok: missing.length === 0, shown: cards.length, expected: t.matches.length, missing: missing.map((m) => `${m.home}-${m.away}`), round: t.round };
-  }, 120_000, "matchs affichés");
+  };
+
+  // Les matchs de la journée en cours apparaissent avec les bonnes cotes
+  const check = await waitFor(shownVsTruth, 120_000, "matchs affichés");
   step("matchs de la journée affichés et identiques au site", check);
-  screencap("1-matchs");
+  await screencap("1-matchs");
 
   await ui.click('[data-testid="match-card"]');
-  await sleep(1500);
-  screencap("2-detail");
+  await screencap("2-detail");
   await ui.click('[aria-label="Retour"]');
 
   await ui.click('[data-testid="tab-results"]');
@@ -122,7 +142,7 @@ try {
     return { ok: n >= 10, rows: n };
   }, 60_000, "résultats");
   step("résultats affichés", results);
-  screencap("3-resultats");
+  await screencap("3-resultats");
 
   await ui.click('[data-testid="tab-standings"]');
   const standings = await waitFor(async () => {
@@ -130,34 +150,79 @@ try {
     return { ok: n === 20, rows: n };
   }, 60_000, "classement");
   step("classement affiché", standings);
-  screencap("4-classement");
+  await screencap("4-classement");
 
   await ui.click('[data-testid="tab-collect"]');
-  await sleep(1000);
-  screencap("5-collecte");
+  await screencap("5-collecte");
   await ui.click('[data-testid="open-collector"]');
-  await sleep(2500);
-  screencap("6-page-collectee");
+  await screencap("6-page-collectee");
   adb("shell", "input", "keyevent", "4");
   await sleep(1500);
 
   await ui.click('[data-testid="tab-more"]');
-  await sleep(1000);
-  screencap("7-qualite");
+  await screencap("7-qualite");
 
-  const counts = await ui.evaluate(`(async () => {
-    const open = indexedDB.open("matchscores");
-    const db = await new Promise((r, j) => { open.onsuccess = () => r(open.result); open.onerror = () => j(open.error); });
-    const count = (store) => new Promise((r) => { const q = db.transaction(store).objectStore(store).count(); q.onsuccess = () => r(q.result); });
-    return { raw: await count("raw_captures"), matches: await count("matches"), odds: await count("odds"), standings: await count("standings") };
-  })()`);
+  /**
+   * Ouvre une autre présentation du site dans le collecteur, puis attend la journée suivante :
+   * ses matchs ne peuvent venir que de cette présentation.
+   */
+  const phase = async (mode, label, shot) => {
+    const from = (await truth()).round;
+    openInCollector(mode);
+    await waitFor(async () => ({ ok: (await targets()).some((x) => x.type === "page" && x.url.includes(`mode=${mode}`)) }), 60_000, `page ${mode}`);
+    await ui.click('[data-testid="tab-matches"]');
+    const shown = await waitFor(async () => {
+      const t = await truth();
+      if (t.round <= from) return { ok: false, waiting: `journée ${t.round}` };
+      return shownVsTruth();
+    }, 150_000, `${label} : matchs de la journée suivante`);
+    const methods = await idb(`return (await all("matches")).filter((m) => m.round === ${shown.round}).map((m) => m.methods.join("+"));`);
+    if (methods.length < shown.expected) throw new Error(`${label} : ${methods.length} matchs de la journée ${shown.round} en base`);
+    step(`${label} : journée ${shown.round} affichée et identique au site`, { ...shown, methods: [...new Set(methods)] });
+    await screencap(shot);
+    return { ...shown, methods };
+  };
+
+  const iframe = await phase("iframe", "iframe d'une autre origine", "8-iframe");
+  const fromFrame = await idb(`return (await all("raw_captures")).filter((r) => (r.frame || "").includes("127.0.0.1:4173/provider") && r.items > 0).map((r) => r.kind);`);
+  if (!fromFrame.includes("xhr") || !iframe.methods.every((m) => m.includes("C"))) throw new Error(`iframe : données non relevées dans l'iframe (${JSON.stringify(fromFrame)})`);
+  step("iframe : réponses relevées dans l'iframe", { captures: fromFrame.length });
+
+  const text = await phase("dom", "texte affiché seul", "9-texte");
+  const fromText = await idb(`return (await all("raw_captures")).filter((r) => r.kind === "dom" && (r.frame || "").includes("mode=dom") && r.items > 0).length;`);
+  if (!fromText || !text.methods.every((m) => m === "D")) throw new Error(`texte : lecture inattendue (${fromText} captures, méthodes ${JSON.stringify(text.methods)})`);
+  step("texte : matchs lus sur l'écran uniquement (méthode D)", { captures: fromText });
+
+  // Relevé de diagnostic : enregistré dans Téléchargements/MatchScores puis proposé au partage
+  await ui.click('[data-testid="tab-more"]');
+  await ui.click('[data-testid="more-settings"]');
+  await ui.click('[data-testid="diagnostic"]');
+  const saved = await waitFor(async () => {
+    const ls = adb("shell", "ls", "/sdcard/Download/MatchScores/");
+    const name = ls.split(/\s+/).find((f) => /^releve-matchscores-.*\.json$/.test(f));
+    return name ? { ok: true, name } : false;
+  }, 60_000, "relevé de diagnostic");
+  const releve = JSON.parse(adb("shell", "cat", `/sdcard/Download/MatchScores/${saved.name}`));
+  step("relevé de diagnostic enregistré", {
+    name: saved.name,
+    endpoints: releve.endpoints.map((e) => `${e.kind} ${e.url} (${e.normalized?.matches ?? 0} matchs)`),
+    pages: releve.pages.map((p) => p.frame),
+    screenshot: Boolean(releve.screenshot),
+  });
+  if (!releve.endpoints.some((e) => (e.normalized?.matches ?? 0) > 0) || !releve.pages.length) throw new Error("relevé incomplet");
+  // Le site de test simule un solde et un numéro de téléphone : ils ne doivent jamais être relevés
+  if (JSON.stringify(releve).includes("+261 34 00 000 00")) throw new Error("le relevé contient des données de compte");
+  await screencap("10-releve");
+  adb("shell", "input", "keyevent", "4");
+
+  const counts = await idb(`return { raw: await count("raw_captures"), matches: await count("matches"), odds: await count("odds"), standings: await count("standings"), cycles: await count("cycles") };`);
   step("base locale", counts);
   report.ok = true;
   ui.close();
 } catch (e) {
   step("ÉCHEC", { error: String(e?.stack ?? e) });
   try {
-    screencap("echec");
+    await screencap("echec");
   } catch {}
 } finally {
   writeFileSync(`${OUT}/rapport.json`, JSON.stringify(report, null, 2));

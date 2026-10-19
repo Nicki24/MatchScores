@@ -48,7 +48,7 @@ bet261 (WebView, Madagascar)
    │  script collecteur injecté dans la page et ses iframes :
    │  réponses JSON (fetch/XHR), WebSocket, SSE → méthode C · texte visible → méthode D · relecture → méthode B
    ▼
-raw_captures (brut horodaté, 7 jours) ──► adaptateurs normalize_<source>() ──► matches · odds · standings
+raw_captures (brut horodaté) ───────────► adaptateurs normalize_<source>() ──► matches · odds · standings
                                                                           (IndexedDB du téléphone)
                                                                                  ▼
                                                      interface : matchs, cotes, forme, classement, qualité
@@ -56,12 +56,12 @@ raw_captures (brut horodaté, 7 jours) ──► adaptateurs normalize_<source>(
 
 | Cahier des charges | Réalisation |
 | --- | --- |
-| Tables `sources`, `raw_captures`, `matches`, `odds`, `standings` | Mêmes tables, dans la base locale (IndexedDB) : `app/src/core/store.ts` |
+| Tables `sources`, `raw_captures`, `matches`, `odds`, `standings` | Mêmes tables, dans la base locale (IndexedDB) : `app/src/core/store.ts`. Pour ménager le téléphone, une capture brute n'est gardée que si sa lecture apporte du nouveau (une page dont seul le compte à rebours change n'est pas ré-enregistrée), les réponses illisibles par échantillons ; 3 jours et 3 000 captures au plus |
 | Contrat d'adaptateur `{ matches, odds, standings }`, upsert sur `(source_id, external_id)` | `app/src/core/normalize/` ; un même match vu par plusieurs méthodes est fusionné (aucun doublon) |
 | F1–F4 matchs, cotes horodatées, scores, classement | Collecte continue tant que la page est ouverte ; une ligne de cote par changement et par méthode |
 | F5 affichage | Onglets Matchs (détail : cotes, probabilités sans marge, forme, confrontations), Résultats, Classement |
 | F6 sources | Réglages → Sources (activer/désactiver) |
-| F7 re-normaliser | Réglages → « Re-normaliser les captures brutes » |
+| F7 re-normaliser | Réglages → « Re-normaliser les captures brutes » (ce qui précède les captures conservées reste tel quel) |
 | NF1 / NF2 | Méthode B : une requête par adresse toutes les 30 s, 3 essais à délai croissant ; rechargement auto de la page |
 | NF3 / NF4 | Plus → Journal (chaque réponse + un cycle par minute) ; alerte et notification après 3 cycles vides |
 | NF5 | Aucun secret : pas de clé, pas de serveur |
@@ -79,7 +79,9 @@ raw_captures (brut horodaté, 7 jours) ──► adaptateurs normalize_<source>(
    vérité du site ;
 3. construction des APK ;
 4. **test de l'APK sur un émulateur Android** : l'appli ouvre le site de test dans son collecteur et doit afficher
-   exactement les matchs et cotes 1X2 de la journée, les résultats et le classement (captures d'écran à l'appui) ;
+   exactement les matchs et cotes 1X2 de la journée, les résultats et le classement ; puis la journée suivante quand
+   le jeu est servi par une iframe d'une autre origine, puis par le texte affiché seul ; enfin le relevé de
+   diagnostic doit être enregistré sans aucune donnée de compte (captures d'écran et rapport à l'appui) ;
 5. publication de l'APK uniquement si tout passe.
 
 ## Développer

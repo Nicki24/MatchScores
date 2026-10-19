@@ -23,6 +23,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -166,6 +167,8 @@ class MainActivity : Activity() {
             // User-Agent honnête : navigateur Android + nom de l'outil (cahier des charges, section 7)
             userAgentString = "$userAgentString MatchScores/${BuildConfig.VERSION_NAME}"
         }
+        // Les matchs virtuels peuvent venir d'une iframe d'un autre domaine (fournisseur) : cookies acceptés comme dans Chrome
+        CookieManager.getInstance().setAcceptThirdPartyCookies(collector, true)
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             WebViewCompat.addDocumentStartJavaScript(collector, collectorJs, setOf("*"))
         }
@@ -419,6 +422,11 @@ class MainActivity : Activity() {
             collectorVisible -> showCollector(false)
             else -> super.onBackPressed()
         }
+    }
+
+    override fun onPause() {
+        CookieManager.getInstance().flush()
+        super.onPause()
     }
 
     override fun onDestroy() {

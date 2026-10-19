@@ -8,7 +8,7 @@
 import { useSyncExternalStore } from "react";
 import { db, dbReady } from "./db";
 import type { CollectorMeta } from "./core/diagnostic";
-import { getSetting, ingestCapture, type IngestResult } from "./core/store";
+import { getSetting, ingestCapture, pruneStorage, type IngestResult } from "./core/store";
 import type { CaptureKind } from "./core/types";
 import { defaultConfig, VirtualLeague } from "./core/sim/engine";
 import { apiResults, apiRound, apiStandings } from "./core/sim/payloads";
@@ -100,10 +100,11 @@ export function enqueueCapture(c: { source: string; kind: CaptureKind; url: stri
       payload: c.body,
       captured_at: new Date(c.at ?? Date.now()).toISOString(),
     });
-    const hasData = r.duplicate || r.matches + r.odds + r.standings > 0;
+    // Une lecture inchangée confirme aussi que les données affichées sont à jour
+    const hasData = r.unchanged || r.matches + r.odds + r.standings > 0;
     if (hasData) minuteData++;
     const now = new Date().toISOString();
-    set({ captures: state.captures + 1, lastCaptureAt: now, ...(hasData && !r.duplicate ? { dataCaptures: state.dataCaptures + 1, lastDataAt: now } : {}) });
+    set({ captures: state.captures + 1, lastCaptureAt: now, ...(hasData ? { dataCaptures: state.dataCaptures + 1, lastDataAt: now } : {}) });
     return r;
   });
   queue = job.catch(() => undefined);
@@ -263,6 +264,7 @@ export function startRuntime() {
   sendNative({ t: "ready" });
   setInterval(minuteTick, 60_000);
   setInterval(replayTick, 30_000);
+  setInterval(() => dbReady.then(() => pruneStorage(db)).catch(() => undefined), 10 * 60_000);
   dbReady.then(async () => {
     const demo = await db.sources.get("demo");
     if (demo?.enabled) setDemo(true);
