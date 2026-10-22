@@ -2,7 +2,8 @@
  * Statistiques descriptives (cahier des charges, section 7) : les matchs virtuels
  * sont tirés au sort ; on décrit les cotes et l'historique, on ne prédit rien.
  */
-import { isStandardSelection, teamKey } from "./normalize/util";
+import { isStandardSelection } from "./normalize/markets";
+import { teamKey } from "./normalize/util";
 import type { MatchRow, OddsRow } from "./types";
 
 export function impliedProbabilities(odds: number[]) {
