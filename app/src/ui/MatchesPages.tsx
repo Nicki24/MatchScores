@@ -1,7 +1,7 @@
 import { useLiveQuery } from "dexie-react-hooks";
 import { ArrowLeft, Check, Radio, TriangleAlert, X } from "lucide-react";
 import { db } from "../db";
-import { computeTable, favourite, headToHead, mainLeague, marketLabel, marketsOf, pct, selectionLabel, teamForm } from "../core/analysis";
+import { computeTable, headToHead, mainLeague, marketLabel, marketsOf, pct, selectionLabel, teamForm } from "../core/analysis";
 import { teamKey } from "../core/normalize/util";
 import { openingMarkets, outcomeOf, predict, type Prediction } from "../core/predict";
 import { upcomingMatches } from "../core/schedule";
@@ -72,7 +72,7 @@ export function PredictionCheck({ m, odds }: { m: MatchRow; odds: OddsRow[] }) {
   );
 }
 
-export function MatchesPage({ onOpen, onCollect, onDemo }: { onOpen: (key: string) => void; onCollect: () => void; onDemo: () => void }) {
+export function MatchesPage({ onOpen, onCollect, onDemo, onPronos }: { onOpen: (key: string) => void; onCollect: () => void; onDemo: () => void; onPronos?: () => void }) {
   const [source] = useViewSource();
   const { matches, category } = useScoped(useRecentMatches(source));
   useTick(15_000);
@@ -112,11 +112,10 @@ export function MatchesPage({ onOpen, onCollect, onDemo }: { onOpen: (key: strin
   const next = upcoming.find((m) => m.status !== "live" && m.kickoff_at);
   return (
     <div>
-      <Disclaimer category={category} />
       {next?.kickoff_at && (
         <div className="mb-4 flex items-center justify-between gap-2 rounded-xl bg-emerald-400/10 px-3 py-2 text-sm" data-testid="next-kickoff">
           <span className="min-w-0 truncate text-emerald-100">
-            Prochain coup d'envoi{next.round != null ? ` · Journée ${next.round}` : ""} · {fmtKickoff(next.kickoff_at)}
+            {next.round != null ? `Journée ${next.round} · ` : "Prochain match · "}coup d'envoi {fmtKickoff(next.kickoff_at)}
           </span>
           <span className="shrink-0 font-bold text-emerald-200">
             <Countdown iso={next.kickoff_at} />
@@ -131,61 +130,55 @@ export function MatchesPage({ onOpen, onCollect, onDemo }: { onOpen: (key: strin
       )}
       {groupByRound(upcoming).map(([title, ms, id]) => (
         <Section key={id} title={title} right={<span className="text-xs text-slate-500">{ms.length} matchs</span>}>
-          <div className="space-y-2">
+          {/* La liste des matchs seulement : qui joue, quand, et les cotes 1 X 2. Les pronostics sont dans l'onglet Pronos. */}
+          <Card className="divide-y divide-white/5">
             {ms.map((m) => {
-              const markets = marketsOf(odds?.get(m.key) ?? []);
-              const main = markets.find((x) => x.market === "1X2") ?? markets.find((x) => x.market === "12");
-              const fav = favourite(markets);
-              const p = (s: string) => main?.selections.find((x) => x.selection === s)?.probability ?? 0;
+              const main = marketsOf(odds?.get(m.key) ?? []).find((x) => x.market === "1X2" || x.market === "12");
               return (
-                <Card key={m.key} className="p-3" onClick={() => onOpen(m.key)}>
-                  <div data-testid="match-card" className="flex items-center gap-3">
-                    <div className="w-14 shrink-0 text-center text-xs text-slate-400">
-                      {m.status === "live" ? (
-                        <Pill tone="red">
-                          <Radio className="h-3 w-3" /> Direct
-                        </Pill>
-                      ) : (
-                        <span className="tabular">{fmtKickoff(m.kickoff_at)}</span>
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-semibold" data-testid="home">
-                        {m.home_team}
-                      </div>
-                      <div className="truncate font-semibold" data-testid="away">
-                        {m.away_team}
-                      </div>
-                    </div>
-                    {m.status === "live" && m.home_score != null && (
-                      <div className="text-lg font-bold tabular">
-                        {m.home_score}-{m.away_score}
-                      </div>
+                <div key={m.key} data-testid="match-card" className="flex cursor-pointer items-center gap-2 px-3 py-2.5 active:bg-white/5" onClick={() => onOpen(m.key)}>
+                  <div className="w-12 shrink-0 text-center text-[11px] leading-tight text-slate-400">
+                    {m.status === "live" ? (
+                      <Pill tone="red">
+                        <Radio className="h-3 w-3" />
+                      </Pill>
+                    ) : (
+                      <span className="tabular">{fmtKickoff(m.kickoff_at)}</span>
                     )}
-                    <div className="flex gap-1">
-                      {(main?.selections ?? []).map((s) => (
-                        <div key={s.selection} className="w-12 rounded-lg bg-white/6 py-1 text-center">
-                          <div className="text-[10px] text-slate-400">{s.selection}</div>
-                          <div className="text-sm font-bold tabular" data-testid={`odd-${s.selection}`}>
-                            {s.value.toFixed(2)}
-                          </div>
-                        </div>
-                      ))}
+                  </div>
+                  <div className="min-w-0 flex-1 text-[14px] leading-snug">
+                    <div className="truncate font-semibold" data-testid="home">
+                      {m.home_team}
+                    </div>
+                    <div className="truncate font-semibold" data-testid="away">
+                      {m.away_team}
                     </div>
                   </div>
-                  {main?.market === "1X2" && <Chances m={m} p={{ "1": p("1"), X: p("X"), "2": p("2") }} />}
-                  {fav && (
-                    <div className="mt-1.5 text-[12px] text-slate-400">
-                      Favori : <b className="text-slate-100">{fav.selection === "X" ? "match nul" : selectionLabel(fav.market, fav.selection, m)}</b> ({pct(fav.probability)} de
-                      chances)
+                  {m.status === "live" && m.home_score != null && (
+                    <div className="shrink-0 font-bold tabular">
+                      {m.home_score}-{m.away_score}
                     </div>
                   )}
-                </Card>
+                  <div className="flex shrink-0 gap-1">
+                    {(main?.selections ?? []).map((s) => (
+                      <div key={s.selection} className="w-[42px] rounded-lg bg-white/6 py-1 text-center">
+                        <div className="text-[10px] leading-none text-slate-400">{s.selection}</div>
+                        <div className="mt-0.5 text-[13px] font-bold leading-none tabular" data-testid={`odd-${s.selection}`}>
+                          {s.value.toFixed(2)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               );
             })}
-          </div>
+          </Card>
         </Section>
       ))}
+      {upcoming.length > 0 && onPronos && (
+        <Button className="mb-4 w-full" onClick={onPronos} testId="go-pronos">
+          Voir les pronostics de ces matchs
+        </Button>
+      )}
     </div>
   );
 }

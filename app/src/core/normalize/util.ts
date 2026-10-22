@@ -114,20 +114,51 @@ export function normalizeSelection(label: string, index: number, count: number, 
   return label.trim();
 }
 
-/** Identifie un marché à partir de son nom et de ses issues. */
-export function classifyMarket(name: string, labels: string[]): string {
+/** Marché d'une période (mi-temps, 10 premières minutes…) : jamais celui du match entier. */
+const PERIOD = /(mi-?temps|half|\bht\b|\b1st\b|\b2nd\b|\bfirst\b|\bsecond\b|1[eè]re|2[eè]me|premi[eè]re p|seconde p|p[ée]riode|period|\b\d{1,2}\s*-\s*\d{1,2}\s*min)/i;
+/** Issues « mi-temps / fin de match » : 1/1, 1/X, X/2, Home/Draw… */
+const HTFT_LABEL = /^([1x2n]|home|draw|away|dom|nul|ext)\s*[/-]\s*([1x2n]|home|draw|away|dom|nul|ext)$/i;
+const BTTS_NAME = /(btts|both teams|deux [ée]quipes marquent|les deux marquent|gg\s*\/\s*ng|^gg|goal\s*\/\s*no ?goal)/i;
+/** Marchés annexes qui reprennent les issues 1 / X / 2 ou plus / moins sans être ceux du match. */
+const SIDE =
+  /(handicap|asian|asiatique|corner|carton|card|booking|pair|impair|odd\s*\/\s*even|premier but|first goal|dernier but|last goal|marque|score first|scorer|buteur|clean sheet|win to nil|sans encaisser|rembours|draw no bet|\bdnb\b|multi|exact goals|nombre (exact )?de buts|combo|&|\+|qualif|outright|domicile|ext[ée]rieur|home team|away team|[ée]quipe|\bteam\b)/i;
+
+/**
+ * Identifie un marché à partir de son nom, de ses issues et du contexte où il a été trouvé
+ * (`scope` : noms et clés des objets parents). Les marchés de mi-temps, mi-temps/fin de match,
+ * handicap ou d'une seule équipe ne sont jamais confondus avec ceux du match (le marché est alors
+ * laissé de côté) : mélangés au résultat du match, ils faussaient les cotes et les pronostics.
+ */
+export function classifyMarket(name: string, labels: string[], scope = "", teams: string[] = []): string {
   const n = name.toLowerCase();
   const ls = labels.map((l) => l.trim().toLowerCase());
+  const other = name.trim() || "AUTRE";
+  if (PERIOD.test(`${name} ${scope}`)) return `MT ${other}`;
+  if (ls.length >= 4 && ls.filter((l) => HTFT_LABEL.test(l)).length >= ls.length * 0.6) return "HTFT";
+  if (BTTS_NAME.test(n)) return "BTTS";
+  const own = teamKey(name);
+  if (SIDE.test(`${name} ${scope}`) || teams.some((t) => teamKey(t).length >= 3 && own.includes(teamKey(t)))) return `AUTRE ${other}`;
   const line = (n.match(/(\d+[.,]5)/) ?? ls.join(" ").match(/(\d+[.,]5)/))?.[1]?.replace(",", ".");
-  if (/double|chance|dc\b/.test(n) || (ls.length === 3 && ls.every((l) => ["1x", "x2", "12", "1/x", "x/2", "1/2"].includes(l.replace(/\s/g, ""))))) return "DC";
+  if (/double|chance|dc\b/.test(n) || (ls.length === 3 && ls.every((l) => ["1x", "x2", "12", "1/x", "x/2", "1/2"].includes(l.replace(/\s/g, ""))))) return ls.length === 3 ? "DC" : other;
   if (/(correct|exact|score\s*exact|cs\b)/.test(n) || (ls.length > 3 && ls.filter((l) => parseScore(l)).length >= ls.length * 0.6)) return "CS";
-  if (/(btts|both|deux [ée]quipes|gg|les deux)/.test(n) || ls.some((l) => ["yes", "oui", "gg", "no", "non", "ng"].includes(l))) return "BTTS";
+  if (ls.some((l) => ["yes", "oui", "gg", "no", "non", "ng"].includes(l))) return "BTTS";
   if (/(over|under|plus|moins|total|o\/u|goals)/.test(n) || ls.some((l) => /^(over|under|plus|moins)/.test(l))) return line ? `OU${line}` : "OU";
-  if (/(1x2|result|résultat|resultat|match winner|3[- ]?way|full ?time|ft)/.test(n)) return "1X2";
+  // Résultat du match : exactement trois issues
+  if (/(1x2|result|résultat|resultat|match winner|3[- ]?way|full ?time|\bft\b)/.test(n)) return ls.length === 3 ? "1X2" : other;
   if (ls.length === 3 && (ls.includes("x") || ls.includes("draw") || ls.includes("nul"))) return "1X2";
   if (ls.length === 3 && ls[0] === "1" && ls[2] === "2") return "1X2";
   if (ls.length === 2 && ls[0] === "1" && ls[1] === "2") return "12";
-  return name.trim() || "AUTRE";
+  return other;
+}
+
+/** Issues reconnues de chaque marché (les autres viennent d'un marché mal identifié). */
+export function isStandardSelection(market: string, selection: string): boolean {
+  if (market === "1X2") return selection === "1" || selection === "X" || selection === "2";
+  if (market === "12") return selection === "1" || selection === "2";
+  if (market === "DC") return selection === "1X" || selection === "12" || selection === "X2";
+  if (market === "BTTS") return selection === "Oui" || selection === "Non";
+  if (market.startsWith("OU")) return selection === "Over" || selection === "Under";
+  return true;
 }
 
 /** Recherche d'une clé insensible à la casse et aux tirets/soulignés. */

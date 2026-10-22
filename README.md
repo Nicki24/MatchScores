@@ -20,8 +20,9 @@ calcule des **pronostics** (issue la plus probable, matchs les moins risqués, s
 
 1. Onglet **Collecte** → « Ouvrir bet261 » : le site s'affiche dans l'appli.
 2. Va dans **Virtuels → Football → English League** (pas besoin de te connecter).
-3. Touche « ← Analyse » : les onglets **Matchs**, **Résultats** et **Classement** se remplissent pendant que la page
-   reste ouverte (l'écran reste allumé pendant la collecte).
+3. Touche « ← Analyse » : les onglets **Matchs** (la liste des matchs à venir : heure, équipes, cotes 1 X 2),
+   **Résultats** et **Classement** se remplissent pendant que la page reste ouverte (l'écran reste allumé pendant la
+   collecte).
 4. Onglet **Pronos** : pour chaque match à venir, qui joue contre qui, qui devrait gagner et avec quelles chances, l'option
    la plus sûre, le score probable ; puis ce qu'ont donné les pronostics de la dernière journée et le bilan (voir plus bas).
 5. En haut à droite, **Virtuel / Réel** : bet261 affiche aussi des matchs réels (accueil, Sport, Live), relevés en passant.
@@ -47,6 +48,9 @@ du site, une fois la marge du bookmaker retirée (`app/src/core/predict.ts`) :
 - **score exact** : cotes du score exact si elles sont relevées, sinon modèle de Poisson (buts de chaque équipe)
   ajusté sur les cotes 1X2 et plus/moins de 2,5 buts ; la carte donne le score le plus probable *qui va avec le
   pronostic* (« 1-0 pour Leeds »), et le plus fréquent s'il diffère ; il dépasse rarement 15 % ;
+- **résultat du match seulement** : les marchés qui reprennent les issues 1 / X / 2 sans être le résultat du match
+  (mi-temps, mi-temps/fin de match, handicap, totaux d'une équipe…) sont écartés à la lecture. Après une mise à jour
+  de cette lecture, l'appli relit une fois d'elle-même les captures conservées (bandeau « Mise à jour des données ») ;
 - **matchs à venir seulement** : un match dont le coup d'envoi est passé, ou dont la journée a déjà commencé dans sa
   ligue, n'est plus proposé même si son résultat n'a pas été relevé ;
 - **résultats** : sous chaque score, le pronostic d'avant-match et s'il a réussi ; par journée, le nombre de pronostics

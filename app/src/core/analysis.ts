@@ -2,7 +2,7 @@
  * Statistiques descriptives (cahier des charges, section 7) : les matchs virtuels
  * sont tirés au sort ; on décrit les cotes et l'historique, on ne prédit rien.
  */
-import { teamKey } from "./normalize/util";
+import { isStandardSelection, teamKey } from "./normalize/util";
 import type { MatchRow, OddsRow } from "./types";
 
 export function impliedProbabilities(odds: number[]) {
@@ -32,10 +32,13 @@ export interface MarketOdds {
 const MARKET_ORDER = ["1X2", "12", "DC", "OU0.5", "OU1.5", "OU2.5", "OU3.5", "OU4.5", "OU5.5", "BTTS", "CS"];
 const SELECTION_ORDER = ["1", "X", "2", "1X", "12", "X2", "Over", "Under", "Oui", "Non"];
 
-/** Dernières cotes de chaque marché, avec leur historique de changements. */
+/**
+ * Dernières cotes de chaque marché, avec leur historique de changements. Les issues étrangères
+ * à un marché (1/1, 1/X… rangées dans le 1X2 par une version précédente) sont ignorées.
+ */
 export function marketsOf(rows: OddsRow[]): MarketOdds[] {
   const byMarket = new Map<string, Map<string, OddsPoint[]>>();
-  for (const r of [...rows].sort((a, b) => a.captured_at.localeCompare(b.captured_at))) {
+  for (const r of [...rows].filter((x) => isStandardSelection(x.market, x.selection)).sort((a, b) => a.captured_at.localeCompare(b.captured_at))) {
     const m = byMarket.get(r.market) ?? new Map<string, OddsPoint[]>();
     const h = m.get(r.selection) ?? [];
     if (h.length === 0 || h[h.length - 1].value !== r.value) h.push({ value: r.value, at: r.captured_at });

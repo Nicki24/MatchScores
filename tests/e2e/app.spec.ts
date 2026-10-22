@@ -49,6 +49,10 @@ async function expectMatchesShown(app: Page) {
 test("chaîne complète — API JSON (méthode C) → base → écrans", async ({ context }) => {
   const { app } = await pipeline(context, "api");
   await expectMatchesShown(app);
+  // Liste simple : 3 cotes (1 X 2) par match, même si le site propose aussi mi-temps et mi-temps/fin de match ; rien ne déborde
+  const oddsPerCard = await app.getByTestId("match-card").evaluateAll((els) => els.map((e) => e.querySelectorAll('[data-testid^="odd-"]').length));
+  expect(new Set(oddsPerCard)).toEqual(new Set([3]));
+  expect(await app.evaluate(() => [...document.querySelectorAll("main, body")].every((e) => e.scrollWidth <= e.clientWidth))).toBe(true);
   await shot(app, "1-matchs");
 
   await app.getByTestId("match-card").first().click();
@@ -202,4 +206,40 @@ test("démo : l'appli s'utilise sans bet261", async ({ page }) => {
   await expect(page.getByTestId("standings").locator("tbody tr")).toHaveCount(20);
   await page.getByTestId("tab-matches").click();
   await shot(page, "7-demo");
+});
+
+test("mise à jour : les cotes mélangées par l'ancienne version sont relues, les pronostics reviennent", async ({ page }) => {
+  await page.goto(APP);
+  await expect(page.getByTestId("go-demo")).toBeVisible();
+  const round = await (await page.request.get(`${MOCK}/api/v1/virtual/english-league/round`)).json();
+  // Base laissée par la version précédente : capture brute conservée, matchs avec 1/1, 1/X… rangés dans le 1X2, pas de marqueur de version
+  await page.evaluate(async (round) => {
+    const open = indexedDB.open("matchscores");
+    const db: IDBDatabase = await new Promise((r, j) => {
+      open.onsuccess = () => r(open.result);
+      open.onerror = () => j(open.error);
+    });
+    const tx = db.transaction(["raw_captures", "matches", "odds", "settings"], "readwrite");
+    const now = new Date().toISOString();
+    tx.objectStore("raw_captures").add({ source_id: "bet261", kind: "xhr", url: "https://bet261.mg/api/virtual/round", payload: JSON.stringify(round), captured_at: now, hash: "old", items: 1 });
+    for (const e of round.events) {
+      const key = `bet261|${e.eventId}`;
+      tx.objectStore("matches").put({ key, source_id: "bet261", external_id: e.eventId, category: "virtual", league: "English League", round: round.round.number, home_team: e.homeTeam.name, away_team: e.awayTeam.name, pair: "x", kickoff_at: e.startTime, status: "scheduled", first_seen_at: now, updated_at: now, methods: ["C"] });
+      ["1", "X", "2", "1/1", "1/X", "1/2", "X/1", "X/X", "X/2", "2/1", "2/X", "2/2"].forEach((selection, i) =>
+        tx.objectStore("odds").add({ match_key: key, market: "1X2", selection, value: 2 + i, captured_at: now, method: "C" }),
+      );
+    }
+    tx.objectStore("settings").delete("normalizerVersion");
+    await new Promise((r) => (tx.oncomplete = r));
+    db.close();
+  }, round);
+  await page.reload();
+  await page.getByTestId("tab-predictions").click();
+  await expect(page.getByTestId("prediction-card")).toHaveCount(10, { timeout: 30_000 });
+  // Les cotes relues sont celles du résultat du match, pas les valeurs mélangées
+  await page.getByTestId("tab-matches").click();
+  const first = round.events[0];
+  const card = page.getByTestId("match-card").filter({ hasText: first.homeTeam.name });
+  await expect(card.getByTestId("odd-1")).toHaveText(first.markets.find((m: { marketName: string }) => m.marketName === "1X2").selections[0].odds);
+  await expect(card.locator('[data-testid^="odd-"]')).toHaveCount(3);
 });

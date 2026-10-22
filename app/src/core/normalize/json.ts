@@ -9,6 +9,7 @@ import {
   cleanName,
   hash,
   isObj,
+  isStandardSelection,
   normalizeSelection,
   parseIntSafe,
   parseOdds,
@@ -38,8 +39,8 @@ const LEAGUE_KEYS = ["league", "leagueName", "tournament", "tournamentName", "co
 const SEASON_KEYS = ["season", "seasonId", "seasonName", "seasonNumber"];
 const ROUND_KEYS = ["round", "roundNumber", "matchday", "matchDay", "week", "weekNumber", "gameDay", "journee", "roundName", "eventBlock"];
 const ODDS_KEYS = ["odds", "odd", "price", "coef", "coefficient", "rate", "value", "decimal", "decimalOdds", "o", "Odds", "Price"];
-const LABEL_KEYS = ["name", "label", "outcome", "outcomeName", "selection", "selectionName", "type", "shortName", "code", "n", "title", "Name"];
-const MARKET_NAME_KEYS = ["marketName", "name", "market", "betType", "type", "title", "description", "Name", "MarketName"];
+const LABEL_KEYS = ["name", "label", "outcome", "outcomeName", "selection", "selectionName", "type", "shortName", "code", "n", "title", "Name", "desc", "outcomeDesc", "displayName"];
+const MARKET_NAME_KEYS = ["marketName", "name", "market", "betType", "type", "title", "description", "Name", "MarketName", "desc", "marketDesc", "displayName"];
 const LINE_KEYS = ["line", "handicap", "specialValue", "sv", "total", "points", "specifier", "specifiers"];
 
 function str(v: unknown): string | undefined {
@@ -187,28 +188,39 @@ function marketNameOf(obj: Obj, fallback: string): string {
 /** Marchés retenus : les autres listes de nombres (statistiques…) sont ignorées. */
 export const KNOWN_MARKET = /^(1X2|12|DC|BTTS|CS|OU(\d+\.5)?)$/;
 
-function addMarket(out: OddsInput[], externalId: string, name: string, sels: Sel[]) {
-  const market = classifyMarket(name, sels.map((s) => s.label));
+interface OddsCtx {
+  externalId: string;
+  out: OddsInput[];
+  /** Équipes du match : un marché à leur nom (« Total Leeds ») ne concerne qu'une équipe. */
+  teams: string[];
+}
+
+function addMarket(ctx: OddsCtx, name: string, sels: Sel[], scope: string) {
+  const market = classifyMarket(name, sels.map((s) => s.label), scope, ctx.teams);
   if (!KNOWN_MARKET.test(market)) return;
+  // Un seul marché de chaque sorte par match : le premier (celui du match entier, affiché en tête)
+  if (ctx.out.some((o) => o.external_id === ctx.externalId && o.market === market)) return;
   sels.forEach((s, i) => {
-    out.push({ external_id: externalId, market, selection: normalizeSelection(s.label, i, sels.length, market), value: s.odds });
+    const selection = normalizeSelection(s.label, i, sels.length, market);
+    if (isStandardSelection(market, selection)) ctx.out.push({ external_id: ctx.externalId, market, selection, value: s.odds });
   });
 }
 
-function collectOdds(node: unknown, externalId: string, out: OddsInput[], name = "", depth = 0): void {
+/** `scope` : noms et clés des objets parents (« firstHalf », « Mi-temps »…), pour reconnaître une période. */
+function collectOdds(node: unknown, ctx: OddsCtx, name = "", scope = "", depth = 0, root = false): void {
   if (depth > 7 || node == null || typeof node !== "object") return;
   if (Array.isArray(node)) {
     const sels = node.map(selectionOf);
     if (node.length >= 2 && sels.every((s): s is Sel => !!s)) {
-      addMarket(out, externalId, name, sels);
+      addMarket(ctx, name, sels, scope);
       return;
     }
     const nums = node.map(parseOdds);
     if ((node.length === 2 || node.length === 3) && nums.every((n): n is number => n != null)) {
-      addMarket(out, externalId, name || (node.length === 3 ? "1X2" : "12"), nums.map((odds, i) => ({ label: node.length === 3 ? ["1", "X", "2"][i] : ["1", "2"][i], odds })));
+      addMarket(ctx, name || (node.length === 3 ? "1X2" : "12"), nums.map((odds, i) => ({ label: node.length === 3 ? ["1", "X", "2"][i] : ["1", "2"][i], odds })), scope);
       return;
     }
-    for (const item of node) collectOdds(item, externalId, out, name, depth + 1);
+    for (const item of node) collectOdds(item, ctx, name, scope, depth + 1);
     return;
   }
   const obj = node as Obj;
@@ -217,16 +229,19 @@ function collectOdds(node: unknown, externalId: string, out: OddsInput[], name =
   if (entries.length >= 2 && entries.length <= 3 && entries.every(([k, v]) => /^(1|x|2|home|draw|away)$/i.test(k) && parseOdds(v))) {
     const order = (k: string) => ["1", "home", "x", "draw", "2", "away"].indexOf(k.toLowerCase()) >> 1;
     const sorted = [...entries].sort((a, b) => order(a[0]) - order(b[0]));
-    addMarket(out, externalId, "1X2", sorted.map(([k, v]) => ({ label: k, odds: parseOdds(v)! })));
+    addMarket(ctx, "1X2", sorted.map(([k, v]) => ({ label: k, odds: parseOdds(v)! })), scope);
     return;
   }
-  const marketName = marketNameOf(obj, name);
+  // Le nom du match lui-même (« Leeds - Burnley ») n'est pas un nom de marché
+  const marketName = root ? "" : marketNameOf(obj, name);
   for (const [k, v] of entries) {
-    if (v && typeof v === "object") collectOdds(v, externalId, out, Array.isArray(v) ? marketName : marketNameOf(isObj(v) ? v : {}, marketName || k), depth + 1);
+    if (!v || typeof v !== "object") continue;
+    const childScope = `${scope} ${/^\d+$/.test(k) ? "" : k}`.trim();
+    collectOdds(v, ctx, Array.isArray(v) ? marketName : marketNameOf(isObj(v) ? v : {}, marketName || k), Array.isArray(v) ? childScope : `${childScope} ${marketName}`.trim(), depth + 1);
   }
 }
 
-function directOdds(obj: Obj, externalId: string, out: OddsInput[]) {
+function directOdds(obj: Obj, ctx: OddsCtx) {
   const sets = [
     ["odd1", "oddX", "odd2"],
     ["homeOdds", "drawOdds", "awayOdds"],
@@ -238,7 +253,7 @@ function directOdds(obj: Obj, externalId: string, out: OddsInput[]) {
     const vals = keys.map((k) => parseOdds(pick(obj, [k])));
     if (vals[0] && vals[2]) {
       const sels = vals[1] ? [vals[0], vals[1], vals[2]] : [vals[0], vals[2]];
-      addMarket(out, externalId, sels.length === 3 ? "1X2" : "12", sels.map((odds, i) => ({ label: sels.length === 3 ? ["1", "X", "2"][i] : ["1", "2"][i], odds: odds! })));
+      addMarket(ctx, sels.length === 3 ? "1X2" : "12", sels.map((odds, i) => ({ label: sels.length === 3 ? ["1", "X", "2"][i] : ["1", "2"][i], odds: odds! })), "");
       return;
     }
   }
@@ -335,8 +350,9 @@ function eventOf(obj: Obj, [home, away]: [string, string], ctx: Ctx): { match: M
   const fuzzy = !id && round == null && !kickoff;
   const externalId = id ?? `h${hash([league, season, round, kickoff, home, away].join("|"))}`;
   const odds: OddsInput[] = [];
-  collectOdds(obj, externalId, odds);
-  if (!odds.length) directOdds(obj, externalId, odds);
+  const oddsCtx: OddsCtx = { externalId, out: odds, teams: [home, away] };
+  collectOdds(obj, oddsCtx, "", "", 0, true);
+  if (!odds.length) directOdds(obj, oddsCtx);
   if (!hasSignal && !odds.length) return undefined;
   const status = statusOf(obj, !!score, kickoff, ctx.reference);
   return {

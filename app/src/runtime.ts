@@ -8,7 +8,8 @@
 import { useSyncExternalStore } from "react";
 import { db, dbReady } from "./db";
 import type { CollectorMeta } from "./core/diagnostic";
-import { getSetting, ingestCapture, pruneStorage, type IngestResult } from "./core/store";
+import { NORMALIZER_VERSION } from "./core/normalize/adapters";
+import { getSetting, ingestCapture, pruneStorage, refreshStoredData, setSetting, type IngestResult } from "./core/store";
 import type { CaptureKind } from "./core/types";
 import { defaultConfig, VirtualLeague } from "./core/sim/engine";
 import { apiResults, apiRound, apiStandings } from "./core/sim/payloads";
@@ -39,6 +40,8 @@ export interface RuntimeState {
   alert?: string;
   toast?: string;
   demoRunning: boolean;
+  /** Relecture des données après une mise à jour de l'appli (« 120/800 »). */
+  refreshing?: string;
 }
 
 let state: RuntimeState = {
@@ -109,6 +112,30 @@ export function enqueueCapture(c: { source: string; kind: CaptureKind; url: stri
   });
   queue = job.catch(() => undefined);
   return job;
+}
+
+/**
+ * Données enregistrées par une version précédente de la lecture : relues une fois, au premier
+ * lancement de la nouvelle version, dans la file des captures (aucune capture ne s'intercale).
+ */
+function refreshAfterUpdate() {
+  const job = queue.then(async () => {
+    await dbReady;
+    if ((await getSetting(db, "normalizerVersion", 1)) >= NORMALIZER_VERSION) return;
+    // Deux tentatives au plus : si l'appli a été fermée (ou a planté) pendant la relecture, on n'insiste pas.
+    // L'affichage ignore de toute façon les issues étrangères à un marché.
+    const attempts = await getSetting(db, "refreshAttempts", 0);
+    await setSetting(db, "refreshAttempts", attempts + 1);
+    if (attempts < 2 && (await db.matches.count())) {
+      set({ refreshing: "…" });
+      await refreshStoredData(db, (done, total) => {
+        if (done % 25 === 0 || done === total) set({ refreshing: `${done}/${total}` });
+      });
+    }
+    await setSetting(db, "normalizerVersion", NORMALIZER_VERSION);
+    await setSetting(db, "refreshAttempts", 0);
+  });
+  queue = job.catch(() => undefined).finally(() => set({ refreshing: undefined }));
 }
 
 /* ---------- Messages de l'appli Android ---------- */
@@ -266,6 +293,7 @@ export function startRuntime() {
   };
   set({ native: !!window.MSNative });
   sendNative({ t: "ready" });
+  refreshAfterUpdate();
   setInterval(minuteTick, 60_000);
   setInterval(replayTick, 30_000);
   setInterval(() => dbReady.then(() => pruneStorage(db)).catch(() => undefined), 10 * 60_000);

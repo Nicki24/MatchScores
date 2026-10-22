@@ -77,9 +77,14 @@ export function App() {
         />
       </header>
 
-      <main className="flex-1 overflow-y-auto px-3 pb-24 pt-4">
+      {rt.refreshing && (
+        <div className="border-b border-white/5 bg-cyan-400/10 px-4 py-2 text-center text-xs text-cyan-100" data-testid="refreshing">
+          Mise à jour des données enregistrées pour la nouvelle version… {rt.refreshing}
+        </div>
+      )}
+      <main className="flex-1 overflow-y-auto overflow-x-hidden px-3 pb-24 pt-4">
         <div className="mx-auto max-w-xl">
-          {tab === "matches" && <MatchesPage onOpen={setDetail} onCollect={() => setTab("collect")} onDemo={startDemo} />}
+          {tab === "matches" && <MatchesPage onOpen={setDetail} onCollect={() => setTab("collect")} onDemo={startDemo} onPronos={() => setTab("predictions")} />}
           {tab === "predictions" && <PredictionsPage onOpen={setDetail} />}
           {tab === "results" && <ResultsPage onOpen={setDetail} />}
           {tab === "standings" && <StandingsPage />}

@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyBatch, ensureSources, ingestCapture, MatchScoresDB, pruneStorage, renormalize } from "../../app/src/core/store";
+import { applyBatch, ensureSources, ingestCapture, MatchScoresDB, pruneStorage, refreshStoredData, renormalize } from "../../app/src/core/store";
 import { computeTable, marketsOf, teamForm } from "../../app/src/core/analysis";
 import { defaultConfig, VirtualLeague } from "../../app/src/core/sim/engine";
 import { apiResults, apiRound, apiStandings, wsFrames } from "../../app/src/core/sim/payloads";
@@ -56,7 +56,7 @@ describe("base locale", () => {
     expect((await capture("xhr", payload, now)).stored).toBe(true);
     expect((await capture("xhr", payload, now + 3000)).unchanged).toBe(true);
     const changed = apiRound(s);
-    changed.events[0].markets[0].selections[0].odds = "9.99";
+    changed.events[0].markets.find((mk) => mk.marketName === "1X2")!.selections[0].odds = "9.99";
     await capture("xhr", JSON.stringify(changed), now + 6000);
     const key = `bet261|${s.matches[0].id}`;
     const history = (await db.odds.where("match_key").equals(key).toArray()).filter((o) => o.market === "1X2" && o.selection === "1");
@@ -69,7 +69,7 @@ describe("base locale", () => {
     const s = league.state(now);
     const payload = JSON.stringify(apiRound(s));
     const changed = apiRound(s);
-    changed.events[0].markets[0].selections[0].odds = "9.99";
+    changed.events[0].markets.find((mk) => mk.marketName === "1X2")!.selections[0].odds = "9.99";
     await capture("xhr", payload, now);
     await capture("xhr", JSON.stringify(changed), now + 3000);
     expect((await capture("xhr", payload, now + 6000)).stored).toBe(true);
@@ -238,5 +238,21 @@ describe("virtuel ou réel", () => {
     expect((await db.matches.toArray()).map((m) => m.external_id)).toEqual(["y"]);
     expect(await db.odds.count()).toBe(0);
     expect(await db.aliases.get("bet261|x")).toBeUndefined();
+  });
+});
+
+describe("mise à jour de l'appli", () => {
+  it("relit les captures conservées et retire les cotes mélangées des matchs plus anciens", async () => {
+    const now = T0 + (5 * 120 + 30) * 1000;
+    // Match d'avant les captures conservées, avec des issues mi-temps/fin de match rangées dans le 1X2
+    await applyBatch(db, "bet261", { matches: [{ external_id: "old", home_team: "Leeds", away_team: "Burnley", round: 3, status: "finished", home_score: 1, away_score: 0 }], odds: [], standings: [] }, "C", at(T0 - 3600_000));
+    await db.odds.bulkAdd(["1", "X", "2", "1/1", "X/2"].map((selection, i) => ({ match_key: "bet261|old", market: "1X2", selection, value: 2 + i, captured_at: at(T0 - 3600_000), method: "C" as const })));
+    const s = league.state(now);
+    await capture("xhr", JSON.stringify(apiRound(s)), now, "https://bet261.mg/api/virtual/round");
+    await refreshStoredData(db);
+    expect(await db.matches.get("bet261|old")).toMatchObject({ home_score: 1 });
+    expect(await db.odds.where("match_key").equals("bet261|old").count()).toBe(0);
+    const key = `bet261|${s.matches[0].id}`;
+    expect(marketsOf(await db.odds.where("match_key").equals(key).toArray())[0].selections.map((x) => x.value)).toEqual(s.matches[0].odds["1X2"]);
   });
 });

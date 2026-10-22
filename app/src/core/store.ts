@@ -387,11 +387,11 @@ export async function renormalize(db: MatchScoresDB, onProgress?: (done: number,
     await db.aliases.filter((a) => removed.has(a.key)).delete();
     await db.standings.where("captured_at").aboveOrEqual(since).delete();
   });
-  // Par paquets : les captures ne tiennent pas toutes en mémoire
+  // Par petits paquets : une capture peut peser 1 Mo, et la mémoire d'un téléphone est limitée
   let done = 0;
   let lastId = 0;
   for (;;) {
-    const chunk = await db.raw_captures.where("id").above(lastId).limit(100).toArray();
+    const chunk = await db.raw_captures.where("id").above(lastId).limit(10).toArray();
     if (!chunk.length) break;
     for (const c of chunk) {
       try {
@@ -403,6 +403,18 @@ export async function renormalize(db: MatchScoresDB, onProgress?: (done: number,
     }
     lastId = chunk[chunk.length - 1].id!;
   }
+}
+
+/**
+ * Après une correction de la lecture : relit les captures brutes conservées (F7), puis retire les
+ * cotes des matchs plus anciens que ces captures, lues par l'ancienne version (elles pouvaient
+ * mélanger les marchés). Leurs scores et résultats sont gardés.
+ */
+export async function refreshStoredData(db: MatchScoresDB, onProgress?: (done: number, total: number) => void) {
+  const oldest = (await db.raw_captures.orderBy("captured_at").first())?.captured_at ?? new Date().toISOString();
+  await renormalize(db, onProgress);
+  const stale = await db.matches.where("first_seen_at").below(oldest).primaryKeys();
+  if (stale.length) await db.odds.where("match_key").anyOf(stale).delete();
 }
 
 /**

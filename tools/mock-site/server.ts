@@ -34,7 +34,7 @@ function fragment(s: SimState) {
   const rows = s.matches
     .map(
       (m) => `<div class="ev" data-id="${m.id}"><span class="time" data-ts="${m.kickoff}"></span><div class="teams"><span>${esc(m.home)}</span><span>${esc(m.away)}</span></div>
-<div class="odds"><button><i>1</i><b>${m.odds["1X2"][0].toFixed(2)}</b></button><button><i>X</i><b>${m.odds["1X2"][1].toFixed(2)}</b></button><button><i>2</i><b>${m.odds["1X2"][2].toFixed(2)}</b></button></div>
+<div class="odds"><button><i>1</i><b>${m.odds["1X2"][0].toFixed(2)}</b></button><button><i>X</i><b>${m.odds["1X2"][1].toFixed(2)}</b></button><button><i>2</i><b>${m.odds["1X2"][2].toFixed(2)}</b></button>${["1/1", "1/X", "X/X"].map((l, i) => `<button><i>${l}</i><b>${m.odds.HTFT[[0, 1, 4][i]].toFixed(2)}</b></button>`).join("")}</div>
 ${m.status === "live" ? `<span class="live">EN DIRECT ${m.homeGoals} - ${m.awayGoals}</span>` : ""}</div>`,
     )
     .join("\n");
@@ -83,7 +83,7 @@ async function fromApi() {
   const last = results.rounds[0] || { matches: [] };
   render({
     league: round.league.name, season: round.season.id, round: round.round.number,
-    events: round.events.map((e) => ({ id: e.eventId, home: e.homeTeam.name, away: e.awayTeam.name, kickoff: Date.parse(e.startTime), odds: e.markets[0].selections.map((s) => Number(s.odds)), live: e.status === 'Live' && e.score ? e.score.home + ' - ' + e.score.away : '' })),
+    events: round.events.map((e) => ({ id: e.eventId, home: e.homeTeam.name, away: e.awayTeam.name, kickoff: Date.parse(e.startTime), odds: e.markets.find((mk) => mk.marketName === '1X2').selections.map((s) => Number(s.odds)), live: e.status === 'Live' && e.score ? e.score.home + ' - ' + e.score.away : '' })),
     results: last.matches.map((m) => ({ home: m.home, away: m.away, hg: m.result.split(':')[0], ag: m.result.split(':')[1] })),
     table: standings.table.map((r) => ({ position: r.position, team: r.team.name, played: r.played, won: r.won, drawn: r.drawn, lost: r.lost, gf: r.goalsFor, ga: r.goalsAgainst, points: r.points, form: r.form })),
   });
@@ -99,7 +99,7 @@ function fromWs() {
     }
     if (wsData.round && wsData.results && wsData.table) render({
       league: wsData.round.LeagueName, season: wsData.round.SeasonNumber, round: wsData.round.RoundNumber,
-      events: wsData.round.Events.map((e) => ({ id: e.Id, home: e.Participants[0].Name, away: e.Participants[1].Name, kickoff: Date.parse(e.StartDate), odds: e.Markets[0].Outcomes.map((o) => o.Price), live: e.Status === 'Live' ? e.Score : '' })),
+      events: wsData.round.Events.map((e) => ({ id: e.Id, home: e.Participants[0].Name, away: e.Participants[1].Name, kickoff: Date.parse(e.StartDate), odds: e.Markets.find((mk) => mk.Name === 'Match Result').Outcomes.map((o) => o.Price), live: e.Status === 'Live' ? e.Score : '' })),
       results: wsData.results.Events.map((e) => ({ home: e.Participants[0].Name, away: e.Participants[1].Name, hg: e.Score.split('-')[0], ag: e.Score.split('-')[1] })),
       table: wsData.table.Rows.map((r) => ({ position: r.Rank, team: r.TeamName, played: r.Played, won: r.Won, drawn: r.Draw, lost: r.Lost, gf: r.GoalsFor, ga: r.GoalsAgainst, points: r.Points, form: '' })),
     });
