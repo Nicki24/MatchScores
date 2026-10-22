@@ -55,7 +55,7 @@ function str(v: unknown): string | undefined {
 function teamsOf(obj: Obj): [string, string] | undefined {
   const h = str(pick(obj, HOME_KEYS));
   const a = str(pick(obj, AWAY_KEYS));
-  if (h && a && h !== a && !/^\d+$/.test(h)) return [h, a];
+  if (h && a && h !== a && !/^\d+$/.test(h) && !/^\d+$/.test(a)) return [h, a];
   for (const key of ["competitors", "teams", "participants", "opponents", "Participants", "Competitors"]) {
     const arr = obj[key];
     if (Array.isArray(arr) && arr.length === 2) {

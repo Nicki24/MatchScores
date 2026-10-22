@@ -48,11 +48,16 @@ export interface RawCapture {
 
 export type MatchStatus = "scheduled" | "live" | "finished";
 
+/** Football virtuel (tiré au sort par le site) ou match réel. */
+export type Category = "virtual" | "real";
+
 /** Table matches — unique (source_id, external_id). */
 export interface MatchRow {
   key: string;
   source_id: string;
   external_id: string;
+  /** Virtuel ou réel, d'après la page où le match a été vu (voir core/category.ts). */
+  category?: Category;
   league?: string;
   season?: string;
   round?: number;
@@ -89,6 +94,7 @@ export interface OddsRow {
 export interface StandingRow {
   key: string;
   source_id: string;
+  category?: Category;
   league: string;
   season: string;
   round: number;

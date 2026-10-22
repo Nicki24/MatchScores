@@ -8,6 +8,11 @@ import { cleanName, hash, ODDS_RE, parseOdds, parseTime } from "./util";
 const NOISE =
   /^(\+?\d{1,3}|1|x|2|1x|x2|12|n|plus|moins|over|under|oui|non|gg|ng|live|en direct|paris|pari|cotes?|parier|\d{1,2}[:h]\d{2}(:\d{2})?|\d{1,2}[/.]\d{1,2}([/.]\d{2,4})?|aujourd'hui|demain|today|tomorrow|statistiques?|stats|voir|plus de paris|\+ ?\d+|[-–:]|vs?\.?|résultats?|resultats?|classement|journ[ée]e.*|round.*|week.*|semaine.*|saison.*|season.*|d[ée]but.*|starts? in.*)$/i;
 const SPORT_HEADING = /^(football|foot|soccer|virtuels?|virtual|sports? virtuels?)$/i;
+/** Libellés de l'interface du site (menus, boutons, marchés) : jamais des noms d'équipes. */
+const UI_WORDS =
+  /^(connexion|se connecter|inscription|s'inscrire|cr[ée]er un compte|d[ée]connexion|mon compte|profil|solde|d[ée]p[oô]ts?|retraits?|mes paris|historique|paris en direct|paris sportifs|sports?|accueil|menu|aide|contact|promotions?|promos?|bonus|jackpots?|casino|jeux|top|populaires?|favoris|rechercher|recherche|filtres?|tous|toutes|tout voir|voir tout|afficher plus|march[ée]s?|plus de march[ée]s|calendrier|programme|ticket|coupon|panier|mise|gains?|gains? potentiels?|valider|placer le pari|langue|fran[çc]ais|english|malagasy|maintenant|bient[oô]t|termin[ée]e?s?|annul[ée]e?s?|suspendue?s?|ferm[ée]e?s?|ouverte?s?|total|handicap|double chance|mi-temps|score exact|les deux [ée]quipes marquent|buts?|minutes?|r[èe]gles?|conditions|jeu responsable)$/i;
+/** Score en cours (pas un résultat final) : « EN DIRECT 2 - 0 », « Live », « MT ». */
+const LIVE_MARK = /^(en direct|direct|live|mt|mi-temps|ht|\d{1,3}')(\s|$)/i;
 const LEAGUE_HINT = /(league|ligue|premier|championship|liga|serie|bundesliga|cup|coupe|division)/i;
 const ROUND_WORD = /(journ[ée]e|round|week|semaine|matchday)\s*[:#°n.]*\s*(\d{1,4})/i;
 /** Ligne courte qui annonce une journée : « Journée 12 », « Résultats — Round 11 », « J12 ». */
@@ -32,6 +37,9 @@ function isName(line: string) {
     !NOISE.test(line) &&
     !ODDS_RE.test(line) &&
     !SPORT_HEADING.test(line) &&
+    !UI_WORDS.test(line) &&
+    !LIVE_MARK.test(line) &&
+    !/\d\s*[-:–]\s*\d/.test(line) &&
     !RESULT_RE.test(line) &&
     !/^[VNDPWL]{3,10}$/.test(line)
   );
@@ -189,7 +197,27 @@ export function parseStandingsText(text: string): StandingInput[] {
 }
 
 const SCORE_TOKEN = /^(\d{1,2})\s*[-:–]\s*(\d{1,2})$/;
-const isTeamLine = (l: string) => l.length >= 2 && l.length <= 40 && /[a-zà-ÿ]{2,}/i.test(l) && !NOISE.test(l) && !isRoundLine(l) && !LEAGUE_HINT.test(l);
+const isTeamLine = (l: string) =>
+  l.length >= 2 &&
+  l.length <= 40 &&
+  /[a-zà-ÿ]{2,}/i.test(l) &&
+  !/\d\s*[-:–]\s*\d/.test(l) &&
+  !LIVE_MARK.test(l) &&
+  !NOISE.test(l) &&
+  !UI_WORDS.test(l) &&
+  !isRoundLine(l) &&
+  !LEAGUE_HINT.test(l);
+
+/**
+ * Score final plausible. « 20:30 » ou « 07:56 » est une heure de coup d'envoi, pas un score :
+ * lue comme un score, elle transformait un match à venir en résultat « 7 - 56 ».
+ */
+function finalScore(raw: string): [number, number] | undefined {
+  const m = raw.trim().match(SCORE_TOKEN);
+  if (!m || /^\d{1,2}:\d{2}$/.test(raw.trim())) return undefined;
+  const [h, a] = [Number(m[1]), Number(m[2])];
+  return h <= 15 && a <= 15 ? [h, a] : undefined;
+}
 
 export function parseResultsText(text: string, reference: Date): MatchInput[] {
   const out: MatchInput[] = [];
@@ -211,13 +239,14 @@ export function parseResultsText(text: string, reference: Date): MatchInput[] {
     // « London Reds 2 - 1 Leeds »
     const m = line.match(RESULT_RE);
     if (m) {
-      push(m[1], Number(m[2]), Number(m[3]), m[4]);
+      const sc = finalScore(line.slice(m[1].length).match(/^\s*(\d{1,2}\s*[-:–]\s*\d{1,2})/)?.[1] ?? "");
+      if (sc && !LIVE_MARK.test(m[1])) push(m[1], sc[0], sc[1], m[4]);
       continue;
     }
     // « London Reds » / « 2 - 1 » / « Leeds »
-    const sc = lines[i + 1]?.match(SCORE_TOKEN);
+    const sc = finalScore(lines[i + 1] ?? "");
     if (sc && isTeamLine(line) && lines[i + 2] && isTeamLine(lines[i + 2])) {
-      push(line, Number(sc[1]), Number(sc[2]), lines[i + 2]);
+      push(line, sc[0], sc[1], lines[i + 2]);
       i += 2;
       continue;
     }

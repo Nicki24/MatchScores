@@ -35,7 +35,13 @@ export function hash(s: string): string {
   return (h >>> 0).toString(36);
 }
 
-/** Date ISO depuis un horodatage (s ou ms), une chaîne ISO ou « HH:MM » (aujourd'hui, heure locale). */
+const HALF_DAY_MS = 12 * 3600_000;
+
+/**
+ * Date ISO depuis un horodatage (s ou ms), une chaîne ISO ou « HH:MM » (heure locale).
+ * Une heure seule désigne l'occurrence la plus proche de la capture : « 00:05 » relevé
+ * à 23:58 est le lendemain, « 23:55 » relevé à 00:02 est la veille.
+ */
 export function parseTime(v: unknown, reference = new Date()): string | undefined {
   if (v == null || v === "") return undefined;
   if (typeof v === "number") {
@@ -47,8 +53,14 @@ export function parseTime(v: unknown, reference = new Date()): string | undefine
   const s = v.trim();
   const hm = s.match(/^(\d{1,2})[:h](\d{2})(?::(\d{2}))?$/);
   if (hm) {
+    const h = Number(hm[1]);
+    const min = Number(hm[2]);
+    if (h > 23 || min > 59) return undefined;
     const d = new Date(reference);
-    d.setHours(Number(hm[1]), Number(hm[2]), Number(hm[3] ?? 0), 0);
+    d.setHours(h, min, Number(hm[3] ?? 0), 0);
+    const diff = d.getTime() - reference.getTime();
+    if (diff > HALF_DAY_MS) d.setDate(d.getDate() - 1);
+    else if (diff < -HALF_DAY_MS) d.setDate(d.getDate() + 1);
     return d.toISOString();
   }
   if (/^\d{10,13}$/.test(s)) return parseTime(Number(s), reference);

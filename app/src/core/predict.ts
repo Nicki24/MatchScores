@@ -42,6 +42,8 @@ export interface Prediction {
   expected: { home: number; away: number };
   /** Scores exacts les plus probables. */
   scores: ScoreProbability[];
+  /** Score le plus probable pour chaque issue (1, X, 2) : celui qui va avec le pronostic. */
+  scoreFor: Partial<Record<"1" | "X" | "2", ScoreProbability>>;
   scoreSource: "marché" | "modèle";
   over25: number;
   btts: number;
@@ -174,6 +176,11 @@ export function predict(markets: MarketOdds[]): Prediction | undefined {
     for (let i = 0; i < grid.length; i++) for (let j = 0; j < grid[i].length; j++) scores.push({ home: i, away: j, probability: grid[i][j] });
   }
   scores.sort((a, b) => b.probability - a.probability);
+  const scoreFor: Prediction["scoreFor"] = {};
+  for (const s of scores) {
+    const o = s.home > s.away ? "1" : s.home === s.away ? "X" : "2";
+    scoreFor[o] ??= s;
+  }
 
   const odds1x2 = new Map(m1x2.selections.map((s) => [s.selection, s.value]));
   const outcome = (["1", "X", "2"] as const).map((s) => ({ market: "1X2" as const, selection: s, probability: p.get(s) ?? 0, odds: odds1x2.get(s) })).sort((a, b) => b.probability - a.probability)[0];
@@ -196,6 +203,7 @@ export function predict(markets: MarketOdds[]): Prediction | undefined {
     confidence: confidenceOf(outcome.probability),
     expected: goals,
     scores: scores.slice(0, 5),
+    scoreFor,
     scoreSource,
     over25: over ?? model.over25,
     btts: fair(markets.find((m) => m.market === "BTTS"))?.get("Oui") ?? model.btts,

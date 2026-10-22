@@ -104,3 +104,18 @@ describe("adaptateur texte (méthode D)", () => {
     expect(b.matches.map((m) => `${m.home_team}-${m.away_team}`)).toEqual(["Arsenal-Chelsea", "Liverpool-Everton"]);
   });
 });
+
+describe("résultats lus dans le texte", () => {
+  const at = new Date(Date.UTC(2026, 9, 22, 7, 50)).toISOString();
+  it("une heure de coup d'envoi n'est jamais lue comme un score, ni « EN DIRECT » comme une équipe", () => {
+    const page = ["Journée 7", "07:56", "Sheffield", "Leeds", "1", "1.66", "X", "3.50", "2", "4.20", "EN DIRECT 2 - 0", "07:56", "Burnley", "Wolves", "Leeds 20:30 Burnley"].join("\n");
+    const finished = normalizeText(page, at).matches.filter((m) => m.status === "finished");
+    expect(finished).toEqual([]);
+  });
+
+  it("lit toujours les vrais résultats, sur une ou trois lignes", () => {
+    const page = ["Résultats — Journée 6", "Leeds 2 - 1 Burnley", "Wolves", "0:0", "Crystal", "Brighton 3:1 Leicester"].join("\n");
+    const r = normalizeText(page, at).matches.filter((m) => m.status === "finished");
+    expect(r.map((m) => `${m.home_team} ${m.home_score}-${m.away_score} ${m.away_team}`)).toEqual(["Leeds 2-1 Burnley", "Wolves 0-0 Crystal", "Brighton 3-1 Leicester"]);
+  });
+});
