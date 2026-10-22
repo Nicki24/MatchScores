@@ -1,11 +1,11 @@
-import { CalendarClock, ListOrdered, MoreHorizontal, Radar, Target, Trophy } from "lucide-react";
+import { CalendarClock, Gamepad2, ListOrdered, MoreHorizontal, Radar, Target, Trophy } from "lucide-react";
 import { useState } from "react";
 import { db } from "../db";
 import { setDemo, useRuntime } from "../runtime";
 import { setSetting } from "../core/store";
 import { CollectPage } from "./CollectPage";
-import { useViewSource } from "./hooks";
-import { cx, Pill } from "./kit";
+import { useCategory, useViewSource } from "./hooks";
+import { cx, Pill, Segmented } from "./kit";
 import { MatchDetail, MatchesPage, ResultsPage, StandingsPage } from "./MatchesPages";
 import { JournalPage, QualityPage, SettingsPage } from "./MorePages";
 import { PredictionsPage } from "./PredictionsPage";
@@ -27,12 +27,14 @@ export function App() {
   const [more, setMore] = useState<More>("quality");
   const [detail, setDetail] = useState<string>();
   const [source] = useViewSource();
+  const [category, setCategory] = useCategory();
   const rt = useRuntime();
 
   const startDemo = async () => {
     await db.sources.update("demo", { enabled: true });
     await setDemo(true);
     await setSetting(db, "viewSource", "demo");
+    setCategory("virtual");
     setTab("matches");
   };
 
@@ -42,10 +44,37 @@ export function App() {
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-emerald-400 to-cyan-400 text-xs font-black text-emerald-950">MS</span>
         <div className="min-w-0 flex-1">
           <div className="text-[15px] font-bold leading-tight">MatchScores</div>
-          <div className="text-[11px] text-slate-500">Football virtuel · source : {source === "demo" ? "démo (simulée)" : source}</div>
+          <div className="truncate text-[11px] text-slate-500">
+            {category === "virtual" ? "Football virtuel" : "Matchs réels"} · {source === "demo" ? "démo (simulée)" : source}
+          </div>
         </div>
         {rt.demoRunning && <Pill tone="amber">Démo</Pill>}
         {rt.alert && <Pill tone="red">Alerte</Pill>}
+        {/* Virtuel et réel ne sont jamais mélangés : chaque onglet montre la catégorie choisie ici */}
+        <Segmented
+          value={category}
+          onChange={setCategory}
+          options={[
+            {
+              id: "virtual",
+              testId: "cat-virtual",
+              label: (
+                <>
+                  <Gamepad2 className="h-3.5 w-3.5" /> Virtuel
+                </>
+              ),
+            },
+            {
+              id: "real",
+              testId: "cat-real",
+              label: (
+                <>
+                  <Trophy className="h-3.5 w-3.5" /> Réel
+                </>
+              ),
+            },
+          ]}
+        />
       </header>
 
       <main className="flex-1 overflow-y-auto px-3 pb-24 pt-4">

@@ -7,7 +7,9 @@ import { marketsOf } from "../core/analysis";
 import { METHOD_LABELS, retainedMethod, scoreMethods, type MethodScore } from "../core/quality";
 import { renormalize, setSetting } from "../core/store";
 import { APP_VERSION, metas, requestCollectorShot, saveFile, setDemo, toast, useRuntime } from "../runtime";
-import { useSetting, useViewSource } from "./hooks";
+import { categoryResolver, CATEGORY_LABEL } from "../core/category";
+import type { Category } from "../core/types";
+import { useLeagueOverrides, usePolled, useSetting, useViewSource } from "./hooks";
 import { Button, Card, cx, Empty, fmtDateTime, fmtTime, Pill, Section, Toggle } from "./kit";
 
 const pct = (v: number) => `${Math.round(v * 100)} %`;
@@ -29,7 +31,6 @@ async function sourceData(source: string) {
       .above(since)
       .filter((c) => c.source_id === source)
       .toArray(),
-    checks: keys.length ? await db.checks.where("match_key").anyOf(keys).toArray() : [],
   };
 }
 
@@ -71,16 +72,21 @@ function ScoreRow({ s }: { s: MethodScore }) {
 export function QualityPage() {
   const [source] = useViewSource();
   const [conformity, setConformity] = useSetting("conformity", false);
-  const data = useLiveQuery(() => sourceData(source), [source]);
-  if (!data) return null;
-  const scores = scoreMethods({ ...data, conformity });
+  // Grille recalculée toutes les 20 s (pas à chaque capture) ; les vérifications à la main s'affichent tout de suite
+  const data = usePolled(() => sourceData(source), [source], 20_000);
+  const allChecks = useLiveQuery(() => db.checks.toArray(), []);
+  if (!data || !allChecks) return null;
+  const keys = new Set(data.matches.map((m) => m.key));
+  const checks = allChecks.filter((c) => keys.has(c.match_key));
+  const scores = scoreMethods({ ...data, checks, conformity });
   const retained = retainedMethod(scores);
-  const checked = new Map(data.checks.map((c) => [c.match_key, c.ok]));
+  const checked = new Map(checks.map((c) => [c.match_key, c.ok]));
+  const with1x2 = new Set(data.odds.filter((o) => o.market === "1X2").map((o) => o.match_key));
   const toCheck = data.matches
-    .filter((m) => data.odds.some((o) => o.match_key === m.key && o.market === "1X2"))
+    .filter((m) => with1x2.has(m.key))
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .slice(0, 20);
-  const okCount = data.checks.filter((c) => c.ok).length;
+  const okCount = checks.filter((c) => c.ok).length;
   return (
     <div>
       <p className="mb-4 text-sm text-slate-400">
@@ -137,7 +143,7 @@ export function QualityPage() {
         </Card>
       </Section>
 
-      <Section title={`Exactitude : 20 matchs comparés à l'écran (${data.checks.length}/20, ${okCount} identiques)`}>
+      <Section title={`Exactitude : 20 matchs comparés à l'écran (${checks.length}/20, ${okCount} identiques)`}>
         {toCheck.length === 0 ? (
           <Empty title="Aucun match à vérifier">Ouvre la page des matchs dans la collecte.</Empty>
         ) : (
@@ -202,6 +208,67 @@ export function JournalPage() {
         </div>
       ))}
     </Card>
+  );
+}
+
+/**
+ * Ligues relevées ces deux derniers jours, avec leur classement virtuel / réel. Le classement est
+ * automatique (page, adresse, nom de la ligue) ; l'utilisateur peut le corriger ligue par ligue.
+ */
+function LeaguesSection({ source }: { source: string }) {
+  const [overrides, setOverrides] = useLeagueOverrides();
+  const leagues = usePolled(async () => {
+    const since = new Date(Date.now() - 48 * 3600_000).toISOString();
+    const ms = await db.matches
+      .where("updated_at")
+      .above(since)
+      .filter((m) => m.source_id === source)
+      .toArray();
+    const auto = categoryResolver(ms);
+    const out = new Map<string, { league: string; count: number; auto: Category }>();
+    for (const m of ms) {
+      const league = m.league ?? "";
+      if (!league) continue;
+      const l = out.get(league) ?? { league, count: 0, auto: auto(m) };
+      l.count++;
+      out.set(league, l);
+    }
+    return [...out.values()].sort((a, b) => b.count - a.count).slice(0, 40);
+  }, [source], 15_000);
+  if (!leagues?.length) return null;
+  return (
+    <Section title="Ligues : virtuel ou réel">
+      <Card className="divide-y divide-white/5">
+        {leagues.map((l) => (
+          <label key={l.league} className="flex items-center justify-between gap-3 px-4 py-2 text-sm">
+            <span className="min-w-0">
+              <span className="block truncate font-medium">{l.league}</span>
+              <span className="text-xs text-slate-500">
+                {l.count} match{l.count > 1 ? "s" : ""} · détecté : {CATEGORY_LABEL[l.auto].toLowerCase()}
+              </span>
+            </span>
+            <select
+              className="rounded-lg bg-white/8 px-2 py-1"
+              data-testid="league-category"
+              value={overrides[l.league] ?? "auto"}
+              onChange={(e) => {
+                const next = { ...overrides };
+                if (e.target.value === "auto") delete next[l.league];
+                else next[l.league] = e.target.value as Category;
+                setOverrides(next);
+              }}
+            >
+              <option value="auto">Auto ({CATEGORY_LABEL[l.auto]})</option>
+              <option value="virtual">Virtuel</option>
+              <option value="real">Réel</option>
+            </select>
+          </label>
+        ))}
+        <p className="px-4 py-2 text-xs text-slate-500">
+          Une ligue mal classée (des matchs réels parmi les virtuels, ou l'inverse) se corrige ici : tous ses matchs changent d'onglet.
+        </p>
+      </Card>
+    </Section>
   );
 }
 
@@ -277,6 +344,8 @@ export function SettingsPage() {
         </Card>
       </Section>
 
+      <LeaguesSection source={view} />
+
       <Section title="Relevé de diagnostic">
         <Card className="p-4">
           <p className="text-sm text-slate-300">
@@ -294,7 +363,8 @@ export function SettingsPage() {
       <Section title="Données">
         <Card className="space-y-3 p-4">
           <div className="text-xs text-slate-400 tabular">
-            {counts?.raw ?? 0} captures brutes (3 jours au plus) · {counts?.matches ?? 0} matchs · {counts?.odds ?? 0} cotes · {counts?.standings ?? 0} lignes de classement
+            {counts?.raw ?? 0} captures brutes (3 jours au plus) · {counts?.matches ?? 0} matchs · {counts?.odds ?? 0} cotes · {counts?.standings ?? 0} lignes de
+            classement. Les matchs de plus de 5 jours sont effacés automatiquement.
           </div>
           <Button
             className="w-full"

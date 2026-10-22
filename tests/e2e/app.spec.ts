@@ -94,21 +94,25 @@ test("pronostics : issue la plus probable, moins risqués, scores exacts et bila
         const truth = await getTruth(app);
         const upcoming = truth.matches.filter((m) => m.status === "scheduled");
         const cards = await app.getByTestId("prediction-card").evaluateAll((els) =>
-          els.map((e) => ({ text: e.textContent ?? "", outcome: e.querySelector('[data-testid="prediction-outcome"]')?.textContent })),
+          els.map((e) => ({
+            home: e.querySelector('[data-testid="pred-home"]')?.textContent,
+            away: e.querySelector('[data-testid="pred-away"]')?.textContent,
+            outcome: e.querySelector('[data-testid="prediction-outcome"]')?.textContent,
+          })),
         );
+        // Le pronostic dit en clair qui devrait gagner : « Leeds gagne », « Match nul »
         const wrong = upcoming.filter((m) => {
           const o = m.odds["1X2"];
           const best = o.indexOf(Math.min(...o));
-          const label = best === 0 ? m.home : best === 1 ? "Nul" : m.away;
-          return !cards.some((c) => c.text.includes(`${m.home} – ${m.away}`) && c.outcome === label);
+          const label = best === 0 ? `${m.home} gagne` : best === 1 ? "Match nul" : `${m.away} gagne`;
+          return !cards.some((c) => c.home === m.home && c.away === m.away && c.outcome === label);
         });
         return upcoming.length === 10 && cards.length === 10 ? wrong.length : -1;
       },
       { timeout: 40_000, intervals: [1000] },
     )
     .toBe(0);
-  const chips = await app.getByTestId("prediction-scores").first().locator("span").count();
-  expect(chips).toBe(4);
+  await expect(app.getByTestId("prediction-scores").first()).toContainText(/Score probable : \d+-\d+/);
   // Les moins risqués : du plus probable au moins probable
   const probs = (await app.getByTestId("safe-probability").allTextContents()).map((t) => Number.parseInt(t, 10));
   expect(probs).toHaveLength(5);
@@ -128,9 +132,57 @@ test("pronostics : issue la plus probable, moins risqués, scores exacts et bila
   await expect(app.getByTestId("backtest-outcome")).toBeVisible();
 });
 
+test("virtuel et réel ne sont jamais mélangés", async ({ context }) => {
+  const { app } = await pipeline(context, "api");
+  await expectMatchesShown(app);
+  // Un match réel relevé en passant sur la page Sport
+  const real = { events: [{ eventId: "real-1", homeTeam: "Arsenal", awayTeam: "Chelsea", startTime: new Date(Date.now() + 86400_000).toISOString(), tournament: "Premier League", odds: { "1": 2.1, X: 3.4, "2": 3.3 } }] };
+  await app.evaluate(
+    (body) => window.__msFromNative?.(JSON.stringify({ t: "capture", kind: "xhr", url: "https://api.example/api/events", frame: "https://bet261.mg/sport/football", body, at: Date.now() })),
+    JSON.stringify(real),
+  );
+  await app.getByTestId("tab-predictions").click();
+  await expect(app.getByTestId("prediction-card").first()).toBeVisible({ timeout: 30_000 });
+  await expect(app.getByText("Arsenal")).toHaveCount(0);
+  await app.getByTestId("cat-real").click();
+  await expect(app.getByTestId("pred-home")).toHaveText(["Arsenal"]);
+  await expect(app.getByTestId("prediction-outcome")).toHaveText(["Arsenal gagne"]);
+  await app.getByTestId("tab-matches").click();
+  await expect(app.getByTestId("match-card")).toHaveCount(1);
+  await expect(app.getByTestId("match-card").getByTestId("home")).toHaveText("Arsenal");
+  await shot(app, "10-reel");
+  await app.getByTestId("cat-virtual").click();
+  await expect(app.getByText("Arsenal")).toHaveCount(0);
+  await expectMatchesShown(app);
+});
+
+/** Résultats enregistrés dans la base de l'appli qui ne sont pas de vrais résultats du site. */
+async function inventedResults(app: Page) {
+  const stored: string[] = await app.evaluate(async () => {
+    const open = indexedDB.open("matchscores");
+    const db: IDBDatabase = await new Promise((r, j) => {
+      open.onsuccess = () => r(open.result);
+      open.onerror = () => j(open.error);
+    });
+    const all: { status: string; home_team: string; away_team: string; home_score: number; away_score: number; round: number }[] = await new Promise((r) => {
+      const q = db.transaction("matches").objectStore("matches").getAll();
+      q.onsuccess = () => r(q.result);
+    });
+    db.close();
+    return all.filter((m) => m.status === "finished").map((m) => [m.home_team, m.away_team, m.home_score, m.away_score, m.round].join("|"));
+  });
+  const known = new Set((await getTruth(app)).results.map((r) => [r.home, r.away, r.homeGoals, r.awayGoals, r.round].join("|")));
+  return { stored: stored.length, invented: stored.filter((r) => !known.has(r)) };
+}
+
 test("chaîne complète — texte de la page seulement (méthode D)", async ({ context }) => {
   const { app } = await pipeline(context, "dom");
   await expectMatchesShown(app);
+  // Le texte affiche « EN DIRECT 1 - 0 » et les heures « 07:56 » : aucun ne doit devenir un résultat
+  const from = (await getTruth(app)).round;
+  await expect.poll(async () => (await getTruth(app)).round, { timeout: 60_000, intervals: [1000] }).toBeGreaterThan(from + 1);
+  await expect.poll(async () => (await inventedResults(app)).stored, { timeout: 20_000 }).toBeGreaterThanOrEqual(10);
+  expect((await inventedResults(app)).invented).toEqual([]);
   await app.getByTestId("tab-standings").click();
   await expect(app.getByTestId("standings").locator("tbody tr")).toHaveCount(20);
 });

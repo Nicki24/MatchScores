@@ -13,7 +13,7 @@ import type { CaptureKind } from "./core/types";
 import { defaultConfig, VirtualLeague } from "./core/sim/engine";
 import { apiResults, apiRound, apiStandings } from "./core/sim/payloads";
 
-export const APP_VERSION = "2.0.0";
+export const APP_VERSION = "2.1.0";
 export const COLLECTOR_SOURCE = "bet261";
 
 interface NativeBridge {
@@ -139,6 +139,10 @@ function onNative(m: NativeMessage) {
       if (metas.length > 500) metas.splice(0, metas.length - 500);
       break;
     case "collector":
+      // Collecte reprise (écran recréé par Android, appli relancée) : l'écran doit rester allumé comme à l'ouverture
+      if (!state.collector.loadedOnce && !m.loading && m.url) {
+        dbReady.then(() => getSetting(db, "keepAwake", true)).then((on) => on && sendNative({ t: "keepAwake", on: true }), () => undefined);
+      }
       set({
         collector: {
           visible: Boolean(m.visible),
@@ -231,10 +235,10 @@ function demoText(now: number) {
 function demoTick() {
   const now = Date.now();
   const s = demoLeague.state(now);
-  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://api/round", body: JSON.stringify(apiRound(s)), at: now });
-  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://api/results", body: JSON.stringify(apiResults(s, 3)), at: now });
-  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://api/standings", body: JSON.stringify(apiStandings(s)), at: now });
-  enqueueCapture({ source: "demo", kind: "dom", url: "demo://page", body: demoText(now), at: now });
+  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://virtual/api/round", body: JSON.stringify(apiRound(s)), at: now });
+  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://virtual/api/results", body: JSON.stringify(apiResults(s, 3)), at: now });
+  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://virtual/api/standings", body: JSON.stringify(apiStandings(s)), at: now });
+  enqueueCapture({ source: "demo", kind: "dom", url: "demo://virtual/page", body: demoText(now), at: now });
 }
 
 export async function setDemo(on: boolean) {

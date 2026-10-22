@@ -3,7 +3,7 @@
 //  2. l'interface affiche exactement les matchs et cotes 1X2 de la journée en cours ;
 //  3. résultats et classement sont affichés ; captures d'écran à chaque étape ;
 //  4. même vérification quand les matchs viennent d'une iframe d'une autre origine, puis du texte affiché seul ;
-//  5. les pronostics (issue la plus probable, moins risqués, bilan) sont affichés ;
+//  5. les pronostics (qui devrait gagner, moins risqués, bilan) sont affichés, sans résultat inventé ;
 //  6. le relevé de diagnostic est enregistré dans Téléchargements/MatchScores.
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -244,20 +244,28 @@ try {
     const t = await truth();
     const upcoming = t.matches.filter((m) => m.status === "scheduled");
     const cards = await ui.evaluate(`[...document.querySelectorAll('[data-testid="prediction-card"]')].map((e) => ({
-        text: e.textContent,
+        home: e.querySelector('[data-testid="pred-home"]')?.textContent,
+        away: e.querySelector('[data-testid="pred-away"]')?.textContent,
         outcome: e.querySelector('[data-testid="prediction-outcome"]')?.textContent,
       }))`);
+    // Le pronostic dit en clair qui devrait gagner : « Leeds gagne », « Match nul »
     const wrong = upcoming.filter((m) => {
       const o = m.odds["1X2"];
       const best = o.indexOf(Math.min(...o));
-      const label = best === 0 ? m.home : best === 1 ? "Nul" : m.away;
-      return !cards.some((c) => c.text.includes(`${m.home} – ${m.away}`) && c.outcome === label);
+      const label = best === 0 ? `${m.home} gagne` : best === 1 ? "Match nul" : `${m.away} gagne`;
+      return !cards.some((c) => c.home === m.home && c.away === m.away && c.outcome === label);
     });
     const safe = await ui.count('[data-testid="safe-pick"]');
     const bilan = Number(await ui.evaluate(`document.querySelector('[data-testid="backtest-matches"]')?.textContent ?? "0"`));
     return { ok: upcoming.length === 10 && cards.length === 10 && wrong.length === 0 && safe === 5 && bilan >= 10, cards: cards.length, wrong: wrong.length, safe, bilan, round: t.round };
   }, 90_000, "pronostics");
   step("pronostics affichés (issue la plus probable = cote la plus basse) et bilan", pronos);
+  // Aucun résultat inventé : chaque score enregistré est un vrai résultat du site de test
+  const stored = await idb(`return (await all("matches")).filter((m) => m.status === "finished").map((m) => [m.home_team, m.away_team, m.home_score, m.away_score, m.round].join("|"));`);
+  const known = new Set((await truth()).results.map((r) => [r.home, r.away, r.homeGoals, r.awayGoals, r.round].join("|")));
+  const invented = stored.filter((r) => !known.has(r));
+  if (invented.length) throw new Error(`résultats inventés : ${JSON.stringify(invented.slice(0, 5))}`);
+  step("résultats enregistrés identiques au site", { finished: stored.length });
   await screencap("10-pronostics");
 
   // Relevé de diagnostic : enregistré dans Téléchargements/MatchScores puis proposé au partage
