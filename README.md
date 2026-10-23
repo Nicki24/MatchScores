@@ -26,6 +26,9 @@ calcule des **pronostics** (issue la plus probable, matchs les moins risqués, s
 5. Onglet **Plus → Qualité** : la grille du cahier des charges est calculée sur tes données (voir plus bas).
 6. Si aucun match n'apparaît après une minute : **Plus → Réglages → Créer le relevé** et envoie le fichier
    (enregistré dans `Téléchargements/MatchScores`).
+7. Pour repartir de zéro : **Plus → Réglages → Effacer les données collectées** (matchs, cotes, résultats,
+   classements, captures et journal ; les réglages et la connexion à bet261 sont gardés). Inutile d'effacer les
+   données de l'appli dans les paramètres d'Android.
 
 La source **Démo** (Réglages) simule une ligue pour découvrir l'appli sans bet261.
 
@@ -74,7 +77,7 @@ raw_captures (brut horodaté) ───────────► adaptateurs n
 | Cahier des charges | Réalisation |
 | --- | --- |
 | Tables `sources`, `raw_captures`, `matches`, `odds`, `standings` | Mêmes tables, dans la base locale (IndexedDB) : `app/src/core/store.ts`. Pour ménager le téléphone, une capture brute n'est gardée que si sa lecture apporte du nouveau (une page dont seul le compte à rebours change n'est pas ré-enregistrée), les réponses illisibles par échantillons ; 3 jours et 3 000 captures au plus |
-| Contrat d'adaptateur `{ matches, odds, standings }`, upsert sur `(source_id, external_id)` | `app/src/core/normalize/` ; un même match vu par plusieurs méthodes est fusionné (aucun doublon) |
+| Contrat d'adaptateur `{ matches, odds, standings }`, upsert sur `(source_id, external_id)` | `app/src/core/normalize/` ; un même match vu par plusieurs méthodes est fusionné (aucun doublon). Une même affiche qui revient à la saison suivante (même journée, mêmes équipes, donc même identifiant quand il est lu dans le texte) est un nouveau match : un match terminé depuis plus de 10 minutes ne redevient pas « à venir » |
 | F1–F4 matchs, cotes horodatées, scores, classement | Collecte continue tant que la page est ouverte ; une ligne de cote par changement et par méthode |
 | F5 affichage | Onglets Matchs (détail : cotes, probabilités sans marge, pronostic, forme, confrontations), Pronos, Résultats, Classement |
 | F6 sources | Réglages → Sources (activer/désactiver) |

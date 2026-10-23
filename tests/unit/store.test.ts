@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyBatch, ensureSources, ingestCapture, MatchScoresDB, pruneStorage, renormalize } from "../../app/src/core/store";
+import { applyBatch, clearCollectedData, ensureSources, ingestCapture, MatchScoresDB, pruneStorage, renormalize, setSetting } from "../../app/src/core/store";
 import { computeTable, marketsOf, teamForm } from "../../app/src/core/analysis";
 import { defaultConfig, VirtualLeague } from "../../app/src/core/sim/engine";
 import { apiResults, apiRound, apiStandings, wsFrames } from "../../app/src/core/sim/payloads";
@@ -171,5 +171,59 @@ describe("base locale", () => {
     await applyBatch(db, "bet261", { matches: [{ external_id: "a", home_team: "Leeds", away_team: "Burnley", round: 3, status: "finished", home_score: 1, away_score: 0 }], odds: [], standings: [] }, "C", at(T0));
     await applyBatch(db, "bet261", { matches: [{ external_id: "b", home_team: "Leeds", away_team: "Burnley", round: 3, status: "scheduled" }], odds: [], standings: [] }, "D", at(T0 + 3 * 3600_000));
     expect(await db.matches.count()).toBe(2);
+  });
+
+  // Le texte de la page donne la journée et les équipes, pas la saison : à la saison suivante, la même affiche
+  // revient avec le même identifiant. Elle ne doit pas être fusionnée avec le match terminé de la saison d'avant.
+  it.each([
+    ["avec l'heure des matchs", (ms: number) => domText(ms)],
+    ["sans l'heure des matchs", (ms: number) => domText(ms).replace(/^\d\d:\d\d\n/gm, "")],
+  ])("affiche les matchs de la saison suivante, lus dans le texte %s", async (_, text) => {
+    for (let slot = 0; slot < 40; slot++) {
+      const ms = T0 + (slot * 120 + 30) * 1000;
+      await capture("dom", text(ms), ms, "https://site/virtual");
+    }
+    const now = T0 + (39 * 120 + 30) * 1000;
+    const s = league.state(now);
+    expect([s.season, s.round]).toEqual([2, 2]);
+    const all = await db.matches.toArray();
+    const duel = (m: { home_team: string; away_team: string } | { home: string; away: string }) => ("home" in m ? `${m.home}|${m.away}` : `${m.home_team}|${m.away_team}`);
+    // Journée 2 de la saison 2 : à venir, comme sur le site
+    const upcoming = all.filter((m) => m.status !== "finished" && Date.parse(m.updated_at) > now - 20 * 60_000 && m.round === 2);
+    expect(upcoming.map(duel).sort()).toEqual(s.matches.map(duel).sort());
+    // Journée 1 : un match par saison, chacun avec son propre score
+    const round1 = all.filter((m) => m.round === 1);
+    expect(round1).toHaveLength(20);
+    const truth1 = [...league.state(T0 + 30_000 + 120_000).results, ...s.results].filter((m) => m.round === 1);
+    for (const t of truth1) {
+      expect(round1.some((m) => duel(m) === duel(t) && m.status === "finished" && m.home_score === t.homeGoals && m.away_score === t.awayGoals)).toBe(true);
+    }
+    // La re-normalisation retrouve les mêmes matchs (F7)
+    const keys = all.map((m) => m.key).sort();
+    await renormalize(db);
+    expect((await db.matches.toArray()).map((m) => m.key).sort()).toEqual(keys);
+  });
+
+  it("ne crée pas de doublon quand un match terminé reste affiché quelques instants avec ses cotes", async () => {
+    const t = T0 + 3600_000;
+    await applyBatch(db, "bet261", { matches: [{ external_id: "x", home_team: "Leeds", away_team: "Burnley", round: 3, status: "finished", home_score: 2, away_score: 0 }], odds: [], standings: [] }, "D", at(t));
+    await applyBatch(db, "bet261", { matches: [{ external_id: "x", home_team: "Leeds", away_team: "Burnley", round: 3, status: "scheduled" }], odds: [], standings: [] }, "D", at(t + 2 * 60_000));
+    // Résultat relu bien plus tard (page des résultats) : toujours le même match
+    await applyBatch(db, "bet261", { matches: [{ external_id: "x", home_team: "Leeds", away_team: "Burnley", round: 3, status: "finished", home_score: 2, away_score: 0 }], odds: [], standings: [] }, "D", at(t + 3 * 3600_000));
+    expect(await db.matches.toArray()).toMatchObject([{ key: "bet261|x", status: "finished", home_score: 2, away_score: 0 }]);
+  });
+
+  it("efface les données collectées en gardant les sources et les réglages", async () => {
+    const now = T0 + (5 * 120 + 30) * 1000;
+    await capture("xhr", JSON.stringify(apiRound(league.state(now))), now);
+    await capture("dom", domText(now), now + 10, "https://site/virtual");
+    await setSetting(db, "keepAwake", false);
+    await clearCollectedData(db);
+    for (const t of [db.raw_captures, db.matches, db.aliases, db.odds, db.standings, db.cycles, db.checks]) expect(await t.count()).toBe(0);
+    expect(await db.sources.count()).toBe(2);
+    expect((await db.settings.get("keepAwake"))?.value).toBe(false);
+    // La collecte reprend normalement : la même page est de nouveau lue et enregistrée
+    expect((await capture("dom", domText(now), now + 20, "https://site/virtual")).stored).toBe(true);
+    expect(await db.matches.count()).toBeGreaterThan(0);
   });
 });

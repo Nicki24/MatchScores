@@ -5,7 +5,7 @@ import { db } from "../db";
 import { buildDiagnostic, diagnosticFileName, RawSummary } from "../core/diagnostic";
 import { marketsOf } from "../core/analysis";
 import { METHOD_LABELS, retainedMethod, scoreMethods, type MethodScore } from "../core/quality";
-import { renormalize, setSetting } from "../core/store";
+import { clearCollectedData, renormalize, setSetting } from "../core/store";
 import { APP_VERSION, metas, requestCollectorShot, saveFile, setDemo, toast, useRuntime } from "../runtime";
 import { useSetting, useViewSource } from "./hooks";
 import { Button, Card, cx, Empty, fmtDateTime, fmtTime, Pill, Section, Toggle } from "./kit";
@@ -211,6 +211,7 @@ export function SettingsPage() {
   const [view, setView] = useViewSource();
   const [withShot, setWithShot] = useSetting("diagShot", true);
   const [progress, setProgress] = useState<string>();
+  const [confirmErase, setConfirmErase] = useState(false);
   const counts = useLiveQuery(async () => ({ raw: await db.raw_captures.count(), matches: await db.matches.count(), odds: await db.odds.count(), standings: await db.standings.count() }), []);
 
   const createDiagnostic = async () => {
@@ -293,7 +294,7 @@ export function SettingsPage() {
 
       <Section title="Données">
         <Card className="space-y-3 p-4">
-          <div className="text-xs text-slate-400 tabular">
+          <div className="text-xs text-slate-400 tabular" data-testid="data-counts">
             {counts?.raw ?? 0} captures brutes (3 jours au plus) · {counts?.matches ?? 0} matchs · {counts?.odds ?? 0} cotes · {counts?.standings ?? 0} lignes de classement
           </div>
           <Button
@@ -308,19 +309,43 @@ export function SettingsPage() {
           >
             Re-normaliser les captures brutes (F7)
           </Button>
-          <Button
-            className="w-full"
-            variant="danger"
-            onClick={async () => {
-              if (!confirm("Effacer toutes les données collectées ?")) return;
-              await Promise.all([db.raw_captures.clear(), db.matches.clear(), db.aliases.clear(), db.odds.clear(), db.standings.clear(), db.cycles.clear(), db.checks.clear()]);
-              db.streams.clear();
-              await setSetting(db, "viewSource", "bet261");
-              toast("Données effacées");
-            }}
-          >
-            Tout effacer
-          </Button>
+          {/* Confirmation dans la page : le WebView de l'appli Android n'affiche pas les fenêtres confirm() */}
+          {confirmErase ? (
+            <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-3" data-testid="erase-dialog">
+              <p className="text-sm text-rose-100">
+                Effacer les matchs, cotes, résultats, classements, captures brutes et le journal ? Les sources et les réglages sont gardés, et la
+                connexion à bet261 aussi.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <Button className="flex-1" onClick={() => setConfirmErase(false)} testId="erase-cancel">
+                  Annuler
+                </Button>
+                <Button
+                  className="flex-1"
+                  variant="danger"
+                  testId="erase-confirm"
+                  onClick={async () => {
+                    setConfirmErase(false);
+                    setProgress("Effacement…");
+                    await clearCollectedData(db);
+                    await setSetting(db, "viewSource", "bet261");
+                    setProgress(undefined);
+                    toast("Données effacées");
+                  }}
+                >
+                  Oui, effacer
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button className="w-full" variant="danger" onClick={() => setConfirmErase(true)} disabled={!!progress} testId="erase">
+              Effacer les données collectées
+            </Button>
+          )}
+          <p className="text-xs text-slate-400">
+            Si l'affichage semble bloqué sur d'anciens matchs : efface les données collectées puis rouvre bet261 dans l'onglet Collecte. Pas besoin
+            d'effacer les données de l'appli dans les paramètres d'Android.
+          </p>
         </Card>
       </Section>
 

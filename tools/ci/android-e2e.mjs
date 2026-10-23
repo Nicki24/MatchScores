@@ -284,6 +284,23 @@ try {
 
   const counts = await idb(`return { raw: await count("raw_captures"), matches: await count("matches"), odds: await count("odds"), standings: await count("standings"), cycles: await count("cycles") };`);
   step("base locale", counts);
+
+  // Réglages → effacer les données collectées : confirmation dans la page (le WebView n'affiche pas confirm()).
+  // La collecte continue pendant ce temps : il ne doit plus rester aucun match vu avant l'effacement.
+  adb("shell", "am", "start", "-n", `${PKG}/.MainActivity`);
+  await waitFor(async () => (await ui.click('[data-testid="tab-more"]')) && ui.click('[data-testid="more-settings"]'), 30_000, "réglages");
+  const cutoff = await ui.evaluate("new Date(Date.now() - 60_000).toISOString()");
+  const olderThanCutoff = `(await all("matches")).filter((m) => m.first_seen_at < ${JSON.stringify(cutoff)}).length`;
+  const before = await idb(`return ${olderThanCutoff};`);
+  if (!before) throw new Error("aucun match à effacer");
+  await waitFor(() => ui.click('[data-testid="erase"]'), 10_000, "bouton d'effacement");
+  await waitFor(() => ui.click('[data-testid="erase-confirm"]'), 10_000, "confirmation de l'effacement");
+  const erased = await waitFor(async () => {
+    const r = await idb(`return { older: ${olderThanCutoff}, matches: await count("matches"), cycles: await count("cycles") };`);
+    return { ok: r.older === 0 && r.cycles < counts.cycles, ...r };
+  }, 30_000, "effacement des données");
+  step("données collectées effacées depuis les réglages", { before, ...erased });
+  await screencap("12-donnees-effacees");
   report.ok = true;
   ui.close();
 } catch (e) {

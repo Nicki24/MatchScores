@@ -66,6 +66,8 @@ export interface MatchRow {
   away_score?: number;
   first_seen_at: string;
   updated_at: string;
+  /** Première capture où le match est terminé. */
+  finished_at?: string;
   /** Méthodes ayant vu ce match (pour le score de complétude par méthode). */
   methods: Method[];
   /** Méthode qui a fourni le score final. */

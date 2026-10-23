@@ -150,4 +150,19 @@ test("démo : l'appli s'utilise sans bet261", async ({ page }) => {
   await expect(page.getByTestId("standings").locator("tbody tr")).toHaveCount(20);
   await page.getByTestId("tab-matches").click();
   await shot(page, "7-demo");
+
+  // Réglages → effacer les données collectées : confirmation dans la page (le WebView Android n'affiche pas confirm())
+  await page.getByTestId("tab-more").click();
+  await page.getByTestId("more-settings").click();
+  await page.getByTestId("source-demo").click();
+  await expect(page.getByTestId("source-demo")).not.toBeChecked();
+  await page.getByTestId("erase").click();
+  await page.getByTestId("erase-cancel").click();
+  await expect(page.getByTestId("data-counts")).toContainText(/· [1-9]\d* matchs/);
+  await page.getByTestId("erase").click();
+  await shot(page, "8-effacer-les-donnees");
+  await page.getByTestId("erase-confirm").click();
+  await expect(page.getByTestId("data-counts")).toHaveText("0 captures brutes (3 jours au plus) · 0 matchs · 0 cotes · 0 lignes de classement");
+  await page.getByTestId("tab-matches").click();
+  await expect(page.getByTestId("go-demo")).toBeVisible();
 });
