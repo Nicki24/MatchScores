@@ -20,13 +20,19 @@ calcule des **pronostics** (issue la plus probable, matchs les moins risqués, s
 
 1. Onglet **Collecte** → « Ouvrir bet261 » : le site s'affiche dans l'appli.
 2. Va dans **Virtuels → Football → English League** (pas besoin de te connecter).
-3. Touche « ← Analyse » : les onglets **Matchs**, **Résultats** et **Classement** se remplissent pendant que la page
-   reste ouverte (l'écran reste allumé pendant la collecte).
-4. Onglet **Pronos** : pronostic de chaque match à venir, les moins risqués, scores exacts, bilan (voir plus bas).
-5. Onglet **Plus → Qualité** : la grille du cahier des charges est calculée sur tes données (voir plus bas).
-6. Si aucun match n'apparaît après une minute : **Plus → Réglages → Créer le relevé** et envoie le fichier
+3. Touche « ← Analyse » : les onglets **Matchs** (la liste des matchs à venir : heure, équipes, cotes 1 X 2),
+   **Résultats** et **Classement** se remplissent pendant que la page reste ouverte (l'écran reste allumé pendant la
+   collecte).
+4. Onglet **Pronos** : pour chaque match à venir, qui joue contre qui, qui devrait gagner et avec quelles chances, l'option
+   la plus sûre, le score probable ; puis ce qu'ont donné les pronostics de la dernière journée et le bilan (voir plus bas).
+5. En haut à droite, **Virtuel / Réel** : bet261 affiche aussi des matchs réels (accueil, Sport, Live), relevés en passant.
+   Ils ne sont jamais mélangés aux virtuels : chaque onglet montre la catégorie choisie. Le classement est automatique
+   (page ouverte, adresse des données, nom de la ligue, journée) ; une ligue mal classée se corrige dans
+   **Plus → Réglages → Ligues**.
+6. Onglet **Plus → Qualité** : la grille du cahier des charges est calculée sur tes données (voir plus bas).
+7. Si aucun match n'apparaît après une minute : **Plus → Réglages → Créer le relevé** et envoie le fichier
    (enregistré dans `Téléchargements/MatchScores`).
-7. Pour repartir de zéro : **Plus → Réglages → Effacer les données collectées** (matchs, cotes, résultats,
+8. Pour repartir de zéro : **Plus → Réglages → Effacer les données collectées** (matchs, cotes, résultats,
    classements, captures et journal ; les réglages et la connexion à bet261 sont gardés). Inutile d'effacer les
    données de l'appli dans les paramètres d'Android.
 
@@ -37,11 +43,21 @@ La source **Démo** (Réglages) simule une ligue pour découvrir l'appli sans be
 Pour des matchs tirés au sort, la meilleure estimation disponible des chances de chaque issue est donnée par les cotes
 du site, une fois la marge du bookmaker retirée (`app/src/core/predict.ts`) :
 
-- **résultat le plus probable** et **double chance** la plus probable, avec le **risque** (probabilité que le pronostic
-  soit faux) et un niveau : très probable (≥ 70 %), probable (≥ 55 %), incertain ;
+- **pronostic en clair** (« Leeds gagne », « Match nul ») avec ses chances, les chances de chaque équipe et du nul, la
+  **double chance** la plus probable (« Leeds ou nul »), le **risque** (probabilité que le pronostic soit faux) et un
+  niveau : très probable (≥ 70 %), probable (≥ 55 %), incertain ; dès 30 matchs relevés, le taux de réussite observé de
+  ce niveau sur tes données ;
 - **les moins risqués** de la journée, et la probabilité que les 3 premiers passent ensemble dans un combiné ;
 - **score exact** : cotes du score exact si elles sont relevées, sinon modèle de Poisson (buts de chaque équipe)
-  ajusté sur les cotes 1X2 et plus/moins de 2,5 buts ; le score le plus probable dépasse rarement 15 % ;
+  ajusté sur les cotes 1X2 et plus/moins de 2,5 buts ; la carte donne le score le plus probable *qui va avec le
+  pronostic* (« 1-0 pour Leeds »), et le plus fréquent s'il diffère ; il dépasse rarement 15 % ;
+- **résultat du match seulement** : les marchés qui reprennent les issues 1 / X / 2 sans être le résultat du match
+  (mi-temps, mi-temps/fin de match, handicap, totaux d'une équipe…) sont écartés à la lecture. Après une mise à jour
+  de cette lecture, l'appli relit une fois d'elle-même les captures conservées (bandeau « Mise à jour des données ») ;
+- **matchs à venir seulement** : un match dont le coup d'envoi est passé, ou dont la journée a déjà commencé dans sa
+  ligue, n'est plus proposé même si son résultat n'a pas été relevé ;
+- **résultats** : sous chaque score, le pronostic d'avant-match et s'il a réussi ; par journée, le nombre de pronostics
+  justes ;
 - **bilan sur tes données** : pronostics d'avant-match comparés aux résultats (réussite réelle contre réussite
   attendue), et comparaison avec « l'équipe en meilleure forme ».
 
@@ -76,8 +92,9 @@ raw_captures (brut horodaté) ───────────► adaptateurs n
 
 | Cahier des charges | Réalisation |
 | --- | --- |
-| Tables `sources`, `raw_captures`, `matches`, `odds`, `standings` | Mêmes tables, dans la base locale (IndexedDB) : `app/src/core/store.ts`. Pour ménager le téléphone, une capture brute n'est gardée que si sa lecture apporte du nouveau (une page dont seul le compte à rebours change n'est pas ré-enregistrée), les réponses illisibles par échantillons ; 3 jours et 3 000 captures au plus |
-| Contrat d'adaptateur `{ matches, odds, standings }`, upsert sur `(source_id, external_id)` | `app/src/core/normalize/` ; un même match vu par plusieurs méthodes est fusionné (aucun doublon). Une même affiche qui revient à la saison suivante (même journée, mêmes équipes, donc même identifiant quand il est lu dans le texte) est un nouveau match : un match terminé depuis plus de 10 minutes ne redevient pas « à venir » |
+| Tables `sources`, `raw_captures`, `matches`, `odds`, `standings` | Mêmes tables, dans la base locale (IndexedDB) : `app/src/core/store.ts`. Pour ménager le téléphone, une capture brute n'est gardée que si sa lecture apporte du nouveau (une page dont seul le compte à rebours change n'est pas ré-enregistrée), les réponses illisibles par échantillons ; 3 jours et 3 000 captures au plus ; matchs, cotes et classements 5 jours |
+| Contrat d'adaptateur `{ matches, odds, standings }`, upsert sur `(source_id, external_id)` | `app/src/core/normalize/` ; un même match vu par plusieurs méthodes est fusionné (aucun doublon). Une même affiche revenue à la saison suivante ou le lendemain (même journée, mêmes équipes) est une nouvelle rencontre : elle ne reprend ni le score ni l'heure de l'ancienne |
+| Virtuel / réel | `app/src/core/category.ts` : d'après la page, l'adresse des données, la ligue et la journée ; correction par ligue dans les réglages |
 | F1–F4 matchs, cotes horodatées, scores, classement | Collecte continue tant que la page est ouverte ; une ligne de cote par changement et par méthode |
 | F5 affichage | Onglets Matchs (détail : cotes, probabilités sans marge, pronostic, forme, confrontations), Pronos, Résultats, Classement |
 | F6 sources | Réglages → Sources (activer/désactiver) |

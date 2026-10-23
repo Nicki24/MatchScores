@@ -17,6 +17,12 @@ export const normalize_generic: Adapter = (c: RawCapture): NormalizedBatch =>
  */
 export const normalize_bet261: Adapter = (c) => normalize_generic(c);
 
+/**
+ * Version de la lecture. Quand elle change, l'appli relit une fois les captures brutes conservées
+ * (2 : marchés de mi-temps, mi-temps/fin de match et handicap séparés du résultat du match).
+ */
+export const NORMALIZER_VERSION = 2;
+
 export const ADAPTERS: Record<string, Adapter> = {
   bet261: normalize_bet261,
   demo: normalize_generic,

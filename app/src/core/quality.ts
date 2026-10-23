@@ -42,10 +42,10 @@ function median(xs: number[]) {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-/** Dernière cote 1X2 de chaque issue fournie par une méthode donnée. */
-function last1x2(odds: OddsRow[], matchKey: string, method: Method) {
+/** Dernière cote 1X2 de chaque issue fournie par une méthode donnée (`odds` : les cotes d'un seul match). */
+function last1x2(odds: OddsRow[], method: Method) {
   const out = new Map<string, number>();
-  for (const o of odds) if (o.match_key === matchKey && o.method === method && o.market === "1X2") out.set(o.selection, o.value);
+  for (const o of odds) if (o.method === method && o.market === "1X2") out.set(o.selection, o.value);
   return out;
 }
 
@@ -60,6 +60,14 @@ export interface QualityInput {
 export function scoreMethods(input: QualityInput, methods: Method[] = ["B", "C", "D"]): MethodScore[] {
   const { matches, odds, cycles, checks, conformity } = input;
   const byKey = new Map(matches.map((m) => [m.key, m]));
+  // Cotes regroupées par match une fois pour toutes : la grille porte sur des milliers de cotes
+  const oddsOf = new Map<string, OddsRow[]>();
+  for (const o of [...odds].sort((a, b) => a.captured_at.localeCompare(b.captured_at))) {
+    const list = oddsOf.get(o.match_key);
+    if (list) list.push(o);
+    else oddsOf.set(o.match_key, [o]);
+  }
+  const of = (key: string) => oddsOf.get(key) ?? [];
   const timer = cycles.filter((c) => c.kind === "timer");
 
   // Journées complètes les plus récentes : celles dont au moins un résultat est connu
@@ -89,8 +97,8 @@ export function scoreMethods(input: QualityInput, methods: Method[] = ["B", "C",
       let compared = 0;
       let errors = 0;
       for (const m of seen.filter((x) => x.methods.includes("D"))) {
-        const mine = last1x2(odds, m.key, method);
-        const screen = last1x2(odds, m.key, "D");
+        const mine = last1x2(of(m.key), method);
+        const screen = last1x2(of(m.key), "D");
         if (!mine.size || !screen.size) continue;
         compared++;
         if ([...screen].some(([sel, v]) => mine.get(sel) !== v)) errors++;
@@ -103,7 +111,7 @@ export function scoreMethods(input: QualityInput, methods: Method[] = ["B", "C",
     let complete = 0;
     for (const [, ms] of finishedRounds) {
       expected += ms.length;
-      complete += ms.filter((m) => m.methods.includes(method) && last1x2(odds, m.key, method).size >= 2 && (m.result_methods ?? []).includes(method)).length;
+      complete += ms.filter((m) => m.methods.includes(method) && last1x2(of(m.key), method).size >= 2 && (m.result_methods ?? []).includes(method)).length;
     }
     const completeness = { value: expected ? complete / expected : 0, rounds: finishedRounds.length, detail: `${complete}/${expected} matchs complets` };
 
@@ -120,7 +128,7 @@ export function scoreMethods(input: QualityInput, methods: Method[] = ["B", "C",
     // Fraîcheur : retard de la méthode sur la première apparition du match (toutes méthodes confondues)
     const lags: number[] = [];
     for (const m of seen) {
-      const firstMine = odds.filter((o) => o.match_key === m.key && o.method === method).reduce((a, o) => (a && a < o.captured_at ? a : o.captured_at), "");
+      const firstMine = of(m.key).find((o) => o.method === method)?.captured_at;
       if (!firstMine) continue;
       lags.push(Math.max(0, (Date.parse(firstMine) - Date.parse(m.first_seen_at)) / 1000));
     }

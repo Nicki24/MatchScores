@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyBatch, clearCollectedData, ensureSources, ingestCapture, MatchScoresDB, pruneStorage, renormalize, setSetting } from "../../app/src/core/store";
+import { applyBatch, clearCollectedData, ensureSources, ingestCapture, MatchScoresDB, pruneStorage, refreshStoredData, renormalize, setSetting } from "../../app/src/core/store";
 import { computeTable, marketsOf, teamForm } from "../../app/src/core/analysis";
 import { defaultConfig, VirtualLeague } from "../../app/src/core/sim/engine";
 import { apiResults, apiRound, apiStandings, wsFrames } from "../../app/src/core/sim/payloads";
@@ -56,7 +56,7 @@ describe("base locale", () => {
     expect((await capture("xhr", payload, now)).stored).toBe(true);
     expect((await capture("xhr", payload, now + 3000)).unchanged).toBe(true);
     const changed = apiRound(s);
-    changed.events[0].markets[0].selections[0].odds = "9.99";
+    changed.events[0].markets.find((mk) => mk.marketName === "1X2")!.selections[0].odds = "9.99";
     await capture("xhr", JSON.stringify(changed), now + 6000);
     const key = `bet261|${s.matches[0].id}`;
     const history = (await db.odds.where("match_key").equals(key).toArray()).filter((o) => o.market === "1X2" && o.selection === "1");
@@ -69,7 +69,7 @@ describe("base locale", () => {
     const s = league.state(now);
     const payload = JSON.stringify(apiRound(s));
     const changed = apiRound(s);
-    changed.events[0].markets[0].selections[0].odds = "9.99";
+    changed.events[0].markets.find((mk) => mk.marketName === "1X2")!.selections[0].odds = "9.99";
     await capture("xhr", payload, now);
     await capture("xhr", JSON.stringify(changed), now + 3000);
     expect((await capture("xhr", payload, now + 6000)).stored).toBe(true);
@@ -172,45 +172,88 @@ describe("base locale", () => {
     await applyBatch(db, "bet261", { matches: [{ external_id: "b", home_team: "Leeds", away_team: "Burnley", round: 3, status: "scheduled" }], odds: [], standings: [] }, "D", at(T0 + 3 * 3600_000));
     expect(await db.matches.count()).toBe(2);
   });
+});
 
-  // Le texte de la page donne la journée et les équipes, pas la saison : à la saison suivante, la même affiche
-  // revient avec le même identifiant. Elle ne doit pas être fusionnée avec le match terminé de la saison d'avant.
-  it.each([
-    ["avec l'heure des matchs", (ms: number) => domText(ms)],
-    ["sans l'heure des matchs", (ms: number) => domText(ms).replace(/^\d\d:\d\d\n/gm, "")],
-  ])("affiche les matchs de la saison suivante, lus dans le texte %s", async (_, text) => {
-    for (let slot = 0; slot < 40; slot++) {
-      const ms = T0 + (slot * 120 + 30) * 1000;
-      await capture("dom", text(ms), ms, "https://site/virtual");
-    }
-    const now = T0 + (39 * 120 + 30) * 1000;
-    const s = league.state(now);
-    expect([s.season, s.round]).toEqual([2, 2]);
-    const all = await db.matches.toArray();
-    const duel = (m: { home_team: string; away_team: string } | { home: string; away: string }) => ("home" in m ? `${m.home}|${m.away}` : `${m.home_team}|${m.away_team}`);
-    // Journée 2 de la saison 2 : à venir, comme sur le site
-    const upcoming = all.filter((m) => m.status !== "finished" && Date.parse(m.updated_at) > now - 20 * 60_000 && m.round === 2);
-    expect(upcoming.map(duel).sort()).toEqual(s.matches.map(duel).sort());
-    // Journée 1 : un match par saison, chacun avec son propre score
-    const round1 = all.filter((m) => m.round === 1);
-    expect(round1).toHaveLength(20);
-    const truth1 = [...league.state(T0 + 30_000 + 120_000).results, ...s.results].filter((m) => m.round === 1);
-    for (const t of truth1) {
-      expect(round1.some((m) => duel(m) === duel(t) && m.status === "finished" && m.home_score === t.homeGoals && m.away_score === t.awayGoals)).toBe(true);
-    }
-    // La re-normalisation retrouve les mêmes matchs (F7)
-    const keys = all.map((m) => m.key).sort();
-    await renormalize(db);
-    expect((await db.matches.toArray()).map((m) => m.key).sort()).toEqual(keys);
+describe("matchs d'un autre jour ou d'une autre saison", () => {
+  const page = (round: number, line: string) => ["English League", `Journée ${round}`, line].join("\n");
+  const upcoming = (time: string) => `${time}\nLeeds\nBurnley\n1\n1.80\nX\n3.50\n2\n4.20`;
+  const dom = (payload: string, ms: number) => ingestCapture(db, { source_id: "bet261", kind: "dom", url: "https://bet261.mg/virtual", payload, captured_at: at(ms) });
+
+  it("la même journée revenue le lendemain est un nouveau match, sans le score de la veille", async () => {
+    const day1 = Date.UTC(2026, 9, 21, 10, 0);
+    await dom(page(12, upcoming("10:05")), day1);
+    await dom(page(12, "Leeds 2 - 1 Burnley"), day1 + 10 * 60_000);
+    const day2 = day1 + 86400_000;
+    await dom(page(12, upcoming("10:05")), day2);
+    const rows = (await db.matches.toArray()).sort((a, b) => a.first_seen_at.localeCompare(b.first_seen_at));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ status: "finished", home_score: 2, away_score: 1 });
+    expect(rows[1]).toMatchObject({ status: "scheduled", home_score: undefined, kickoff_at: at(day2 + 5 * 60_000) });
+    // Le résultat du lendemain va au match du lendemain
+    await dom(page(12, "Leeds 0 - 0 Burnley"), day2 + 10 * 60_000);
+    const after = await db.matches.get(rows[1].key);
+    expect(after).toMatchObject({ status: "finished", home_score: 0, away_score: 0 });
+    expect((await db.matches.get(rows[0].key))!.home_score).toBe(2);
   });
 
-  it("ne crée pas de doublon quand un match terminé reste affiché quelques instants avec ses cotes", async () => {
-    const t = T0 + 3600_000;
-    await applyBatch(db, "bet261", { matches: [{ external_id: "x", home_team: "Leeds", away_team: "Burnley", round: 3, status: "finished", home_score: 2, away_score: 0 }], odds: [], standings: [] }, "D", at(t));
-    await applyBatch(db, "bet261", { matches: [{ external_id: "x", home_team: "Leeds", away_team: "Burnley", round: 3, status: "scheduled" }], odds: [], standings: [] }, "D", at(t + 2 * 60_000));
-    // Résultat relu bien plus tard (page des résultats) : toujours le même match
-    await applyBatch(db, "bet261", { matches: [{ external_id: "x", home_team: "Leeds", away_team: "Burnley", round: 3, status: "finished", home_score: 2, away_score: 0 }], odds: [], standings: [] }, "D", at(t + 3 * 3600_000));
-    expect(await db.matches.toArray()).toMatchObject([{ key: "bet261|x", status: "finished", home_score: 2, away_score: 0 }]);
+  it("la même affiche à la saison suivante (même journée, sans heure) est un nouveau match", async () => {
+    const t = Date.UTC(2026, 9, 21, 10, 0);
+    await dom(page(12, "Leeds 2 - 1 Burnley"), t);
+    await dom(page(12, "Leeds 1 - 3 Burnley"), t + 2 * 3600_000);
+    expect(await db.matches.count()).toBe(2);
+  });
+
+  it("un résultat relu plusieurs minutes reste le même match", async () => {
+    const t = Date.UTC(2026, 9, 21, 10, 0);
+    await dom(page(12, upcoming("10:05")), t);
+    for (let i = 1; i <= 6; i++) await dom(page(12, `Leeds 2 - 1 Burnley\nPub ${i}`), t + i * 5 * 60_000);
+    expect(await db.matches.count()).toBe(1);
+  });
+
+  it("une heure relevée juste avant minuit désigne le lendemain", async () => {
+    const t = new Date(2026, 9, 21, 23, 58).getTime();
+    await dom(page(3, upcoming("00:04")), t);
+    const m = (await db.matches.toArray())[0];
+    expect(Date.parse(m.kickoff_at!) - t).toBe(6 * 60_000);
+  });
+});
+
+describe("virtuel ou réel", () => {
+  it("classe les matchs d'après la page, l'adresse et la ligue", async () => {
+    const now = T0 + (5 * 120 + 30) * 1000;
+    const s = league.state(now);
+    await capture("xhr", JSON.stringify(apiRound(s)), now, "https://bet261.mg/api/virtual/round");
+    const real = { events: [{ eventId: "r1", homeTeam: "Arsenal", awayTeam: "Chelsea", startTime: at(now + 86400_000), tournament: "Premier League", odds: { "1": 2.1, X: 3.4, "2": 3.3 } }] };
+    await ingestCapture(db, { source_id: "bet261", kind: "xhr", url: "https://api.bet261.mg/api/events", frame: "https://bet261.mg/sport/football", payload: JSON.stringify(real), captured_at: at(now + 50) });
+    const rows = await db.matches.toArray();
+    expect(rows.filter((m) => m.category === "virtual")).toHaveLength(10);
+    expect(rows.filter((m) => m.category === "real").map((m) => m.home_team)).toEqual(["Arsenal"]);
+  });
+
+  it("purge les matchs et cotes de plus de 5 jours", async () => {
+    const old = new Date(Date.now() - 6 * 86400_000).toISOString();
+    await applyBatch(db, "bet261", { matches: [{ external_id: "x", home_team: "Leeds", away_team: "Burnley", round: 3 }], odds: [{ external_id: "x", market: "1X2", selection: "1", value: 2 }], standings: [] }, "C", old);
+    await applyBatch(db, "bet261", { matches: [{ external_id: "y", home_team: "Leeds", away_team: "Wolves", round: 4 }], odds: [], standings: [] }, "C", new Date().toISOString());
+    await pruneStorage(db);
+    expect((await db.matches.toArray()).map((m) => m.external_id)).toEqual(["y"]);
+    expect(await db.odds.count()).toBe(0);
+    expect(await db.aliases.get("bet261|x")).toBeUndefined();
+  });
+});
+
+describe("mise à jour de l'appli", () => {
+  it("relit les captures conservées et retire les cotes mélangées des matchs plus anciens", async () => {
+    const now = T0 + (5 * 120 + 30) * 1000;
+    // Match d'avant les captures conservées, avec des issues mi-temps/fin de match rangées dans le 1X2
+    await applyBatch(db, "bet261", { matches: [{ external_id: "old", home_team: "Leeds", away_team: "Burnley", round: 3, status: "finished", home_score: 1, away_score: 0 }], odds: [], standings: [] }, "C", at(T0 - 3600_000));
+    await db.odds.bulkAdd(["1", "X", "2", "1/1", "X/2"].map((selection, i) => ({ match_key: "bet261|old", market: "1X2", selection, value: 2 + i, captured_at: at(T0 - 3600_000), method: "C" as const })));
+    const s = league.state(now);
+    await capture("xhr", JSON.stringify(apiRound(s)), now, "https://bet261.mg/api/virtual/round");
+    await refreshStoredData(db);
+    expect(await db.matches.get("bet261|old")).toMatchObject({ home_score: 1 });
+    expect(await db.odds.where("match_key").equals("bet261|old").count()).toBe(0);
+    const key = `bet261|${s.matches[0].id}`;
+    expect(marketsOf(await db.odds.where("match_key").equals(key).toArray())[0].selections.map((x) => x.value)).toEqual(s.matches[0].odds["1X2"]);
   });
 
   it("efface les données collectées en gardant les sources et les réglages", async () => {

@@ -44,6 +44,9 @@ describe("pronostics", () => {
     expect(pred.scores).toHaveLength(5);
     expect(pred.scores[0].probability).toBeGreaterThanOrEqual(pred.scores[4].probability);
     expect(pred.scoreSource).toBe("modèle");
+    // Le score affiché avec le pronostic va dans le même sens que lui
+    const s = pred.scoreFor[pred.outcome.selection as "1" | "X" | "2"]!;
+    expect(s.home > s.away ? "1" : s.home === s.away ? "X" : "2").toBe(pred.outcome.selection);
     // Le modèle reproduit les probabilités des cotes
     const g = scoreGrid(pred.expected.home, pred.expected.away);
     const p1 = g.reduce((s, r, i) => s + r.reduce((t, p, j) => t + (i > j ? p : 0), 0), 0);

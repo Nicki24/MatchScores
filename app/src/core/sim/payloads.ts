@@ -8,6 +8,7 @@ import type { SimMatch, SimState } from "./engine";
 const iso = (ms: number) => new Date(ms).toISOString();
 const st = (m: SimMatch) => (m.status === "finished" ? "Finished" : m.status === "live" ? "Live" : "NotStarted");
 const fmt = (n: number) => n.toFixed(2);
+const HTFT_LABELS = ["1/1", "1/X", "1/2", "X/1", "X/X", "X/2", "2/1", "2/X", "2/2"];
 
 /** Format 1 : API REST en camelCase (événements + marchés + sélections). */
 export function apiRound(s: SimState) {
@@ -22,8 +23,12 @@ export function apiRound(s: SimState) {
       startTime: iso(m.kickoff),
       status: st(m),
       score: m.homeGoals == null ? null : { home: m.homeGoals, away: m.awayGoals },
+      // Comme sur bet261 : autour du résultat du match, les marchés de mi-temps et de handicap
       markets: [
+        { marketName: "Résultat mi-temps", selections: ["1", "X", "2"].map((name, i) => ({ name, odds: fmt(m.odds.HT[i]) })) },
         { marketName: "1X2", selections: [{ name: "1", odds: fmt(m.odds["1X2"][0]) }, { name: "X", odds: fmt(m.odds["1X2"][1]) }, { name: "2", odds: fmt(m.odds["1X2"][2]) }] },
+        { marketName: "Résultat mi-temps/fin de match", selections: HTFT_LABELS.map((name, i) => ({ name, odds: fmt(m.odds.HTFT[i]) })) },
+        { marketName: "Handicap 1X2", specialValue: "0:1", selections: ["1", "X", "2"].map((name, i) => ({ name, odds: fmt(m.odds["1X2"][2 - i] + 0.4) })) },
         { marketName: "Total", specialValue: "2.5", selections: [{ name: "Over", odds: fmt(m.odds["OU2.5"][0]) }, { name: "Under", odds: fmt(m.odds["OU2.5"][1]) }] },
         { marketName: "GG/NG", selections: [{ name: "GG", odds: fmt(m.odds.BTTS[0]) }, { name: "NG", odds: fmt(m.odds.BTTS[1]) }] },
       ],
@@ -77,6 +82,8 @@ export function wsFrames(s: SimState): string[] {
       Status: st(m),
       Score: m.homeGoals == null ? null : `${m.homeGoals}-${m.awayGoals}`,
       Markets: [
+        { Name: "1st Half Result", Outcomes: ["Home", "Draw", "Away"].map((Name, i) => ({ Name, Price: m.odds.HT[i] })) },
+        { Name: "HT/FT Result", Outcomes: HTFT_LABELS.map((l, i) => ({ Name: l.replace(/1/g, "Home").replace(/X/g, "Draw").replace(/2/g, "Away"), Price: m.odds.HTFT[i] })) },
         { Name: "Match Result", Outcomes: [{ Name: "Home", Price: m.odds["1X2"][0] }, { Name: "Draw", Price: m.odds["1X2"][1] }, { Name: "Away", Price: m.odds["1X2"][2] }] },
         { Name: "Over/Under 2.5", Outcomes: [{ Name: "Over 2.5", Price: m.odds["OU2.5"][0] }, { Name: "Under 2.5", Price: m.odds["OU2.5"][1] }] },
       ],

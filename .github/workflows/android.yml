@@ -2,7 +2,7 @@ name: Tests et APK
 
 on:
   push:
-    branches: ["ccr-44d6a258-wowvdx", "ccr-76cffb73-9ypmtk", "main"]
+    branches: ["ccr-44d6a258-wowvdx", "claude/app-bugs-virtual-performance-y5mlzk", "ccr-76cffb73-9ypmtk", "main"]
   workflow_dispatch:
 
 permissions:

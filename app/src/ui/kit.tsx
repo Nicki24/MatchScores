@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
-import { selectionLabel, type FormLetter } from "../core/analysis";
-import type { Choice, Confidence } from "../core/predict";
+import { useEffect, useState, type ReactNode } from "react";
+import { pct, selectionLabel, type FormLetter } from "../core/analysis";
+import type { Choice, Confidence, ScoreProbability } from "../core/predict";
 import type { MatchRow } from "../core/types";
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
@@ -61,8 +61,8 @@ export function Section({ title, right, children }: { title: string; right?: Rea
   return (
     <section className="mb-5">
       <div className="mb-2 flex items-end justify-between gap-2 px-1">
-        <h2 className="text-[13px] font-bold uppercase tracking-wider text-slate-400">{title}</h2>
-        {right}
+        <h2 className="min-w-0 text-[13px] font-bold uppercase tracking-wider text-slate-400">{title}</h2>
+        {right && <div className="shrink-0 whitespace-nowrap">{right}</div>}
       </div>
       {children}
     </section>
@@ -103,6 +103,25 @@ export function FormChips({ form }: { form?: string | FormLetter[] }) {
   );
 }
 
+/** Choix entre quelques options (Virtuel / Réel…). */
+export function Segmented<T extends string>({ value, options, onChange, className }: { value: T; options: { id: T; label: ReactNode; testId?: string }[]; onChange: (v: T) => void; className?: string }) {
+  return (
+    <div className={cx("flex rounded-xl bg-white/6 p-0.5 text-xs font-semibold", className)}>
+      {options.map((o) => (
+        <button
+          key={o.id}
+          data-testid={o.testId}
+          aria-pressed={value === o.id}
+          onClick={() => onChange(o.id)}
+          className={cx("flex items-center justify-center gap-1 rounded-[10px] px-2.5 py-1.5 transition", value === o.id ? "bg-emerald-400 text-emerald-950" : "text-slate-400")}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Barre de probabilités (1 / X / 2). */
 export function ProbBar({ parts }: { parts: { label: string; value: number; color: string }[] }) {
   return (
@@ -127,6 +146,41 @@ export function Toggle({ checked, onChange, label, hint, testId }: { checked: bo
 }
 
 export const fmtTime = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—");
+
+const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+
+/** Heure du coup d'envoi, avec le jour quand ce n'est pas aujourd'hui : « 14:32 », « demain 20:00 », « sam. 25/10 15:00 ». */
+export function fmtKickoff(iso?: string, now = Date.now()) {
+  if (!iso) return "heure inconnue";
+  const d = new Date(iso);
+  const days = Math.round((dayStart(d) - dayStart(new Date(now))) / 86400_000);
+  const time = fmtTime(iso);
+  if (days === 0) return time;
+  if (days === 1) return `demain ${time}`;
+  if (days === -1) return `hier ${time}`;
+  return `${d.toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "2-digit" })} ${time}`;
+}
+
+/** « dans 1 min 05 s », « dans 12 min », « dans 3 h 05 », « commencé ». */
+export function countdown(iso: string, now = Date.now()) {
+  const s = Math.round((Date.parse(iso) - now) / 1000);
+  if (s <= 0) return "commencé";
+  if (s < 60) return `dans ${s} s`;
+  if (s < 600) return `dans ${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+  if (s < 3600) return `dans ${Math.round(s / 60)} min`;
+  const m = Math.round(s / 60);
+  return `dans ${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`;
+}
+
+/** Compte à rebours qui se met à jour seul (sans redessiner toute la page). */
+export function Countdown({ iso }: { iso: string }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <span className="tabular">{countdown(iso, now)}</span>;
+}
 export const fmtDateTime = (iso?: string) =>
   iso ? new Date(iso).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
 
@@ -147,3 +201,43 @@ export function ConfidencePill({ c }: { c: Confidence }) {
 /** Libellé d'un pronostic : nom de l'équipe, « Nul », « Leeds ou nul »… */
 export const choiceLabel = (c: Choice, m: Pick<MatchRow, "home_team" | "away_team">) => selectionLabel(c.market, c.selection, m);
 export const scoreLabel = (s: { home: number; away: number }) => `${s.home}-${s.away}`;
+
+/** Le pronostic en une phrase : « Leeds gagne », « Match nul », « Leeds ou nul ». */
+export function verdict(c: Choice, m: Pick<MatchRow, "home_team" | "away_team">) {
+  if (c.market === "1X2") return c.selection === "1" ? `${m.home_team} gagne` : c.selection === "2" ? `${m.away_team} gagne` : "Match nul";
+  return choiceLabel(c, m);
+}
+
+/** « 2-1 pour Leeds », « 1-1 », « 0-2 pour Burnley ». */
+export function scoreSentence(s: ScoreProbability, m: Pick<MatchRow, "home_team" | "away_team">) {
+  if (s.home === s.away) return `${scoreLabel(s)} (nul)`;
+  return `${scoreLabel(s)} pour ${s.home > s.away ? m.home_team : m.away_team}`;
+}
+
+export const OUTCOME_COLORS = { "1": "#34d399", X: "#94a3b8", "2": "#22d3ee" } as const;
+
+/** Chances de chaque issue, avec le nom des équipes : « Leeds 62 % · Nul 24 % · Burnley 14 % ». */
+export function Chances({ m, p }: { m: Pick<MatchRow, "home_team" | "away_team">; p: { "1": number; X: number; "2": number } }) {
+  return (
+    <div className="mt-2.5">
+      <ProbBar
+        parts={[
+          { label: "1", value: p["1"], color: OUTCOME_COLORS["1"] },
+          { label: "X", value: p.X, color: OUTCOME_COLORS.X },
+          { label: "2", value: p["2"], color: OUTCOME_COLORS["2"] },
+        ]}
+      />
+      <div className="mt-1 grid grid-cols-[1fr_auto_1fr] gap-2 text-[11px] text-slate-400 tabular">
+        <span className="truncate">
+          <span style={{ color: OUTCOME_COLORS["1"] }}>●</span> {m.home_team} {pct(p["1"])}
+        </span>
+        <span>
+          <span style={{ color: OUTCOME_COLORS.X }}>●</span> Nul {pct(p.X)}
+        </span>
+        <span className="truncate text-right">
+          {m.away_team} {pct(p["2"])} <span style={{ color: OUTCOME_COLORS["2"] }}>●</span>
+        </span>
+      </div>
+    </div>
+  );
+}

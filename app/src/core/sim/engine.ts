@@ -53,7 +53,15 @@ export interface SimMatch {
   status: SimStatus;
   homeGoals?: number;
   awayGoals?: number;
-  odds: { "1X2": [number, number, number]; "OU2.5": [number, number]; BTTS: [number, number] };
+  odds: {
+    "1X2": [number, number, number];
+    "OU2.5": [number, number];
+    BTTS: [number, number];
+    /** Résultat à la mi-temps (1 / X / 2). */
+    HT: [number, number, number];
+    /** Mi-temps / fin de match, dans l'ordre 1/1, 1/X, 1/2, X/1, X/X, X/2, 2/1, 2/X, 2/2. */
+    HTFT: number[];
+  };
 }
 
 export interface SimStanding {
@@ -181,9 +189,28 @@ export class VirtualLeague {
         if (i + j > 2.5) over += p;
         if (i > 0 && j > 0) btts += p;
       }
+    // Mi-temps : moitié des buts attendus dans chaque période, périodes indépendantes
+    const half = (l: number) => [...Array(7).keys()].map((k) => poisson(k, l / 2));
+    const [hh, ha] = [half(lh), half(la)];
+    const side = (a: number, b: number) => (a > b ? 0 : a === b ? 1 : 2);
+    const ht = [0, 0, 0];
+    const htft = Array(9).fill(0);
+    for (let i = 0; i < 7; i++)
+      for (let j = 0; j < 7; j++) {
+        const p1 = hh[i] * ha[j];
+        ht[side(i, j)] += p1;
+        for (let k = 0; k < 7; k++)
+          for (let l = 0; l < 7; l++) htft[side(i, j) * 3 + side(i + k, j + l)] += p1 * hh[k] * ha[l];
+      }
     const m = 1 + this.cfg.margin;
-    const o = (p: number) => Math.max(1.01, Math.round((1 / (p * m)) * 100) / 100);
-    return { "1X2": [o(ph), o(pd), o(pa)], "OU2.5": [o(over), o(1 - over)], BTTS: [o(btts), o(1 - btts)] };
+    const o = (p: number) => Math.min(500, Math.max(1.01, Math.round((1 / (p * m)) * 100) / 100));
+    return {
+      "1X2": [o(ph), o(pd), o(pa)],
+      "OU2.5": [o(over), o(1 - over)],
+      BTTS: [o(btts), o(1 - btts)],
+      HT: [o(ht[0]), o(ht[1]), o(ht[2])],
+      HTFT: htft.map(o),
+    };
   }
 
   match(slot: number, index: number, now: number): SimMatch {

@@ -8,12 +8,13 @@
 import { useSyncExternalStore } from "react";
 import { db, dbReady } from "./db";
 import type { CollectorMeta } from "./core/diagnostic";
-import { getSetting, ingestCapture, pruneStorage, type IngestResult } from "./core/store";
+import { NORMALIZER_VERSION } from "./core/normalize/adapters";
+import { getSetting, ingestCapture, pruneStorage, refreshStoredData, setSetting, type IngestResult } from "./core/store";
 import type { CaptureKind } from "./core/types";
 import { defaultConfig, VirtualLeague } from "./core/sim/engine";
 import { apiResults, apiRound, apiStandings } from "./core/sim/payloads";
 
-export const APP_VERSION = "2.0.0";
+export const APP_VERSION = "2.1.0";
 export const COLLECTOR_SOURCE = "bet261";
 
 interface NativeBridge {
@@ -39,6 +40,8 @@ export interface RuntimeState {
   alert?: string;
   toast?: string;
   demoRunning: boolean;
+  /** Relecture des données après une mise à jour de l'appli (« 120/800 »). */
+  refreshing?: string;
 }
 
 let state: RuntimeState = {
@@ -111,6 +114,30 @@ export function enqueueCapture(c: { source: string; kind: CaptureKind; url: stri
   return job;
 }
 
+/**
+ * Données enregistrées par une version précédente de la lecture : relues une fois, au premier
+ * lancement de la nouvelle version, dans la file des captures (aucune capture ne s'intercale).
+ */
+function refreshAfterUpdate() {
+  const job = queue.then(async () => {
+    await dbReady;
+    if ((await getSetting(db, "normalizerVersion", 1)) >= NORMALIZER_VERSION) return;
+    // Deux tentatives au plus : si l'appli a été fermée (ou a planté) pendant la relecture, on n'insiste pas.
+    // L'affichage ignore de toute façon les issues étrangères à un marché.
+    const attempts = await getSetting(db, "refreshAttempts", 0);
+    await setSetting(db, "refreshAttempts", attempts + 1);
+    if (attempts < 2 && (await db.matches.count())) {
+      set({ refreshing: "…" });
+      await refreshStoredData(db, (done, total) => {
+        if (done % 25 === 0 || done === total) set({ refreshing: `${done}/${total}` });
+      });
+    }
+    await setSetting(db, "normalizerVersion", NORMALIZER_VERSION);
+    await setSetting(db, "refreshAttempts", 0);
+  });
+  queue = job.catch(() => undefined).finally(() => set({ refreshing: undefined }));
+}
+
 /* ---------- Messages de l'appli Android ---------- */
 
 interface NativeMessage {
@@ -139,6 +166,10 @@ function onNative(m: NativeMessage) {
       if (metas.length > 500) metas.splice(0, metas.length - 500);
       break;
     case "collector":
+      // Collecte reprise (écran recréé par Android, appli relancée) : l'écran doit rester allumé comme à l'ouverture
+      if (!state.collector.loadedOnce && !m.loading && m.url) {
+        dbReady.then(() => getSetting(db, "keepAwake", true)).then((on) => on && sendNative({ t: "keepAwake", on: true }), () => undefined);
+      }
       set({
         collector: {
           visible: Boolean(m.visible),
@@ -231,10 +262,10 @@ function demoText(now: number) {
 function demoTick() {
   const now = Date.now();
   const s = demoLeague.state(now);
-  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://api/round", body: JSON.stringify(apiRound(s)), at: now });
-  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://api/results", body: JSON.stringify(apiResults(s, 3)), at: now });
-  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://api/standings", body: JSON.stringify(apiStandings(s)), at: now });
-  enqueueCapture({ source: "demo", kind: "dom", url: "demo://page", body: demoText(now), at: now });
+  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://virtual/api/round", body: JSON.stringify(apiRound(s)), at: now });
+  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://virtual/api/results", body: JSON.stringify(apiResults(s, 3)), at: now });
+  enqueueCapture({ source: "demo", kind: "xhr", url: "demo://virtual/api/standings", body: JSON.stringify(apiStandings(s)), at: now });
+  enqueueCapture({ source: "demo", kind: "dom", url: "demo://virtual/page", body: demoText(now), at: now });
 }
 
 export async function setDemo(on: boolean) {
@@ -262,6 +293,7 @@ export function startRuntime() {
   };
   set({ native: !!window.MSNative });
   sendNative({ t: "ready" });
+  refreshAfterUpdate();
   setInterval(minuteTick, 60_000);
   setInterval(replayTick, 30_000);
   setInterval(() => dbReady.then(() => pruneStorage(db)).catch(() => undefined), 10 * 60_000);

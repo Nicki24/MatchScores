@@ -3,12 +3,14 @@
  * sources, raw_captures, matches, odds, standings + journal des cycles.
  */
 import Dexie, { type Table } from "dexie";
+import { categorize, guessCategory } from "./category";
 import { adapterFor } from "./normalize/adapters";
 import { hash, teamKey } from "./normalize/util";
 import {
   emptyBatch,
   KIND_METHOD,
   type CaptureKind,
+  type Category,
   type CycleLog,
   type MatchInput,
   type MatchRow,
@@ -72,6 +74,23 @@ export class MatchScoresDB extends Dexie {
       checks: "match_key",
       settings: "key",
     });
+    // v2 : virtuel / réel. Les matchs déjà enregistrés sont classés d'après leur ligue et leur journée.
+    this.version(2)
+      .stores({})
+      .upgrade(async (tx) => {
+        await tx
+          .table("matches")
+          .toCollection()
+          .modify((m: MatchRow) => {
+            m.category ??= guessCategory(m);
+          });
+        await tx
+          .table("standings")
+          .toCollection()
+          .modify((r: StandingRow) => {
+            r.category ??= guessCategory(r);
+          });
+      });
   }
 }
 
@@ -87,8 +106,14 @@ export async function ensureSources(db: MatchScoresDB) {
 const STATUS_ORDER: Record<MatchStatus, number> = { scheduled: 0, live: 1, finished: 2 };
 /** Durée maximale pendant laquelle un même couple d'équipes sans journée/heure est considéré comme le même match. */
 const SAME_MATCH_WINDOW_MS = 60 * 60 * 1000;
-/** Au-delà de ce délai après la fin d'un match, la même affiche « à venir » est un nouveau match (saison suivante). */
-const REPLAY_GAP_MS = 10 * 60 * 1000;
+/**
+ * Durée de vie d'un match virtuel sur la page : affiché quelques journées à l'avance, joué, puis
+ * montré dans les résultats. Au-delà, la même affiche (même journée, mêmes équipes) est une autre
+ * rencontre : celle de la saison suivante, ou du lendemain.
+ */
+const MATCH_LIFETIME_MS = 70 * 60 * 1000;
+/** Écart maximal entre deux heures de coup d'envoi d'un même match. */
+const SAME_KICKOFF_MS = 30 * 60 * 1000;
 /** Une lecture identique à la précédente du même flux n'est ré-enregistrée qu'après ce délai. */
 const UNCHANGED_WINDOW_MS = 10 * 60 * 1000;
 /** Réponse où rien n'est reconnu : un exemplaire par flux et par forme de contenu suffit sur cette durée (relevé, F7). */
@@ -180,7 +205,7 @@ export async function ingestCapture(
   try {
     capture.id = await db.raw_captures.add(capture);
     if (items) {
-      await applyBatch(db, capture.source_id, batch, KIND_METHOD[capture.kind], capture.captured_at);
+      await applyBatch(db, capture.source_id, batch, KIND_METHOD[capture.kind], capture.captured_at, capture);
       st.sig = sig;
       st.storedAt = at;
     }
@@ -191,53 +216,64 @@ export async function ingestCapture(
   return { stored: capture.id != null, unchanged: false, matches: batch.matches.length, odds: batch.odds.length, standings: batch.standings.length, error };
 }
 
-/**
- * `sameId` : même identifiant que le match enregistré. Sans saison ni heure, l'identifiant d'un match lu dans
- * le texte (journée + équipes) revient à chaque saison virtuelle : il ne suffit pas à dire que c'est le même match.
- */
-function sameMatch(existing: MatchRow, m: MatchInput, capturedAt: string, sameId = false): boolean {
+/** Le match enregistré `existing` et le match lu `m` sont-ils la même rencontre ? */
+export function sameMatch(existing: MatchRow, m: MatchInput, capturedAt: string): boolean {
   if (existing.round != null && m.round != null && existing.round !== m.round) return false;
   if (existing.season && m.season && existing.season !== m.season) return false;
-  if (existing.kickoff_at && m.kickoff_at) {
-    return Math.abs(Date.parse(existing.kickoff_at) - Date.parse(m.kickoff_at)) <= 30 * 60 * 1000;
-  }
-  // Ni heure commune : on se fie à la proximité dans le temps (un même couple revient à chaque saison virtuelle).
   const at = Date.parse(capturedAt);
-  const incoming = m.status ?? "scheduled";
-  // Un match commencé ne redevient pas « à venir » : passé quelques minutes, c'est l'affiche d'une saison suivante
-  if (incoming !== "finished" && existing.status !== "scheduled" && at - Date.parse(existing.finished_at ?? existing.updated_at) > REPLAY_GAP_MS) return false;
-  const recent = at - Date.parse(existing.updated_at) <= SAME_MATCH_WINDOW_MS;
-  // Résultat relu plus tard sous le même identifiant : même match tant que le score est le même
-  if (sameId && existing.status === "finished" && incoming === "finished") {
-    return recent || (existing.home_score === m.home_score && existing.away_score === m.away_score);
-  }
-  return recent;
+  // Un match terminé ne se rejoue pas : un coup d'envoi encore à venir, c'est la rencontre suivante
+  if (existing.status === "finished" && m.status !== "finished" && m.status !== "live" && m.kickoff_at && Date.parse(m.kickoff_at) > at + 60_000) return false;
+  // Un score final ne change plus : un autre score final, c'est une autre rencontre
+  if (
+    existing.status === "finished" &&
+    m.status === "finished" &&
+    existing.home_score != null &&
+    m.home_score != null &&
+    (existing.home_score !== m.home_score || existing.away_score !== m.away_score)
+  )
+    return false;
+  if (existing.kickoff_at && m.kickoff_at) return Math.abs(Date.parse(existing.kickoff_at) - Date.parse(m.kickoff_at)) <= SAME_KICKOFF_MS;
+  // Sans heure commune : proximité dans le temps (une même affiche revient à chaque saison virtuelle)
+  return at - Date.parse(existing.updated_at) <= SAME_MATCH_WINDOW_MS && at - Date.parse(existing.first_seen_at) <= MATCH_LIFETIME_MS;
 }
 
+const pairOf = (m: { home_team: string; away_team: string }) => `${teamKey(m.home_team)}|${teamKey(m.away_team)}`;
+
+/**
+ * Clé du match en base. Un identifiant déjà vu ne suffit pas : lu sur la page (journée + équipes),
+ * il revient à l'identique à la saison suivante ou le lendemain, et le nouveau match prendrait
+ * alors le score et l'heure de l'ancien.
+ */
 async function resolveKey(db: MatchScoresDB, sourceId: string, m: MatchInput, capturedAt: string): Promise<string> {
   const aliasKey = `${sourceId}|${m.external_id}`;
+  const pair = pairOf(m);
   const alias = await db.aliases.get(aliasKey);
   if (alias) {
-    const known = await db.matches.get(alias.key);
-    if (!known || sameMatch(known, m, capturedAt, true)) return alias.key;
+    const row = await db.matches.get(alias.key);
+    if (row && row.pair === pair && sameMatch(row, m, capturedAt)) return alias.key;
   }
-  const pair = `${teamKey(m.home_team)}|${teamKey(m.away_team)}`;
   const candidates = await db.matches.where("[source_id+pair]").equals([sourceId, pair]).toArray();
   const found = candidates.filter((c) => sameMatch(c, m, capturedAt)).sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
-  // Identifiant déjà pris par le même duel d'une saison précédente : nouvelle clé, l'alias suit le nouveau match
-  const taken = !found && (await db.matches.get(aliasKey));
-  const key = found?.key ?? (taken ? `${aliasKey}|${Date.parse(capturedAt).toString(36)}` : aliasKey);
+  let key = found?.key;
+  if (!key) {
+    // Identifiant déjà pris par une rencontre précédente : nouvelle clé pour celle-ci
+    key = (await db.matches.get(aliasKey)) ? `${aliasKey}#${Date.parse(capturedAt).toString(36)}` : aliasKey;
+  }
   await db.aliases.put({ alias: aliasKey, key });
   return key;
 }
 
-export async function applyBatch(db: MatchScoresDB, sourceId: string, batch: NormalizedBatch, method: Method, capturedAt: string) {
+/** Page et adresse de la capture : elles disent si les matchs sont virtuels ou réels. */
+export type CaptureContext = Partial<Pick<RawCapture, "url" | "frame">>;
+
+export async function applyBatch(db: MatchScoresDB, sourceId: string, batch: NormalizedBatch, method: Method, capturedAt: string, context: CaptureContext = {}) {
   await db.transaction("rw", [db.matches, db.aliases, db.odds, db.standings], async () => {
     const keys = new Map<string, string>();
     for (const m of batch.matches) {
       const key = await resolveKey(db, sourceId, m, capturedAt);
       keys.set(m.external_id, key);
       const prev = await db.matches.get(key);
+      const cat = categorize(m, context);
       const incomingStatus = m.status ?? "scheduled";
       const status: MatchStatus = prev && STATUS_ORDER[prev.status] > STATUS_ORDER[incomingStatus] ? prev.status : incomingStatus;
       const hasScore = m.home_score != null && m.away_score != null;
@@ -245,19 +281,20 @@ export async function applyBatch(db: MatchScoresDB, sourceId: string, batch: Nor
         key,
         source_id: sourceId,
         external_id: prev?.external_id ?? m.external_id,
+        // Un indice net (page, ligue) l'emporte ; une simple estimation ne remplace pas un classement déjà fait
+        category: cat.strong || !prev?.category ? cat.category : prev.category,
         league: prev?.league ?? m.league,
         season: prev?.season ?? m.season,
         round: prev?.round ?? m.round,
         home_team: prev?.home_team ?? m.home_team,
         away_team: prev?.away_team ?? m.away_team,
-        pair: `${teamKey(m.home_team)}|${teamKey(m.away_team)}`,
+        pair: pairOf(m),
         kickoff_at: prev?.kickoff_at ?? m.kickoff_at,
         status,
         home_score: hasScore && (prev?.home_score == null || incomingStatus === "finished") ? m.home_score : prev?.home_score,
         away_score: hasScore && (prev?.away_score == null || incomingStatus === "finished") ? m.away_score : prev?.away_score,
         first_seen_at: prev?.first_seen_at ?? capturedAt,
         updated_at: capturedAt,
-        finished_at: prev?.finished_at ?? (status === "finished" ? capturedAt : undefined),
         methods: [...new Set([...(prev?.methods ?? []), method])],
         score_method: prev?.score_method ?? (hasScore && incomingStatus === "finished" ? method : undefined),
         result_methods: hasScore && incomingStatus === "finished" ? [...new Set([...(prev?.result_methods ?? []), method])] : prev?.result_methods,
@@ -280,15 +317,20 @@ export async function applyBatch(db: MatchScoresDB, sourceId: string, batch: Nor
     }
 
     if (batch.standings.length) {
-      const league = batch.standings[0].league ?? (await latestLeague(db, sourceId)) ?? "";
-      const season = batch.standings[0].season ?? "";
+      const first = batch.standings[0];
+      // Ligue ou journée absentes du classement : celles des matchs de la même page
+      const hint = { league: first.league ?? batch.matches.find((m) => m.league)?.league, round: first.round ?? batch.matches.find((m) => m.round != null)?.round };
+      const league = hint.league ?? (await latestLeague(db, sourceId, categorize(hint, context).category)) ?? "";
+      const category = categorize({ ...hint, league }, context).category;
+      const season = first.season ?? "";
       // Sans journée indiquée : dans un championnat aller-retour, après la journée N chaque équipe a joué N matchs
       const maxPlayed = Math.max(0, ...batch.standings.map((s) => s.played));
-      const round = batch.standings[0].round ?? (maxPlayed || ((await latestFinishedRound(db, sourceId)) ?? 0));
+      const round = first.round ?? (maxPlayed || ((await latestFinishedRound(db, sourceId)) ?? 0));
       for (const s of batch.standings) {
         const row: StandingRow = {
           key: [sourceId, league, season, round, teamKey(s.team)].join("|"),
           source_id: sourceId,
+          category,
           league,
           season,
           round,
@@ -310,14 +352,22 @@ export async function applyBatch(db: MatchScoresDB, sourceId: string, batch: Nor
   });
 }
 
-async function latestLeague(db: MatchScoresDB, sourceId: string) {
-  const m = await db.matches.where("source_id").equals(sourceId).reverse().sortBy("updated_at");
-  return m.find((x) => x.league)?.league;
+async function latestLeague(db: MatchScoresDB, sourceId: string, category: Category) {
+  const m = await db.matches
+    .orderBy("updated_at")
+    .reverse()
+    .filter((x) => x.source_id === sourceId && !!x.league && (x.category ?? guessCategory(x)) === category)
+    .first();
+  return m?.league;
 }
 
 async function latestFinishedRound(db: MatchScoresDB, sourceId: string) {
-  const m = await db.matches.where("source_id").equals(sourceId).filter((x) => x.status === "finished" && x.round != null).reverse().sortBy("updated_at");
-  return m[0]?.round;
+  const m = await db.matches
+    .orderBy("updated_at")
+    .reverse()
+    .filter((x) => x.source_id === sourceId && x.status === "finished" && x.round != null)
+    .first();
+  return m?.round;
 }
 
 /**
@@ -337,15 +387,15 @@ export async function renormalize(db: MatchScoresDB, onProgress?: (done: number,
     await db.aliases.filter((a) => removed.has(a.key)).delete();
     await db.standings.where("captured_at").aboveOrEqual(since).delete();
   });
-  // Par paquets : les captures ne tiennent pas toutes en mémoire
+  // Par petits paquets : une capture peut peser 1 Mo, et la mémoire d'un téléphone est limitée
   let done = 0;
   let lastId = 0;
   for (;;) {
-    const chunk = await db.raw_captures.where("id").above(lastId).limit(100).toArray();
+    const chunk = await db.raw_captures.where("id").above(lastId).limit(10).toArray();
     if (!chunk.length) break;
     for (const c of chunk) {
       try {
-        await applyBatch(db, c.source_id, adapterFor(c.source_id)(c), KIND_METHOD[c.kind], c.captured_at);
+        await applyBatch(db, c.source_id, adapterFor(c.source_id)(c), KIND_METHOD[c.kind], c.captured_at, c);
       } catch {
         /* capture illisible : ignorée */
       }
@@ -355,13 +405,39 @@ export async function renormalize(db: MatchScoresDB, onProgress?: (done: number,
   }
 }
 
-/** Conservation limitée (place sur le téléphone) : captures brutes 3 jours et 3 000 au plus, journal 7 jours. */
-export async function pruneStorage(db: MatchScoresDB, { rawDays = 3, maxRaw = 3000, cycleDays = 7 } = {}) {
+/**
+ * Après une correction de la lecture : relit les captures brutes conservées (F7), puis retire les
+ * cotes des matchs plus anciens que ces captures, lues par l'ancienne version (elles pouvaient
+ * mélanger les marchés). Leurs scores et résultats sont gardés.
+ */
+export async function refreshStoredData(db: MatchScoresDB, onProgress?: (done: number, total: number) => void) {
+  const oldest = (await db.raw_captures.orderBy("captured_at").first())?.captured_at ?? new Date().toISOString();
+  await renormalize(db, onProgress);
+  const stale = await db.matches.where("first_seen_at").below(oldest).primaryKeys();
+  if (stale.length) await db.odds.where("match_key").anyOf(stale).delete();
+}
+
+/**
+ * Conservation limitée (place et rapidité sur le téléphone) : captures brutes 3 jours et 3 000 au plus,
+ * journal 7 jours, matchs (avec leurs cotes et vérifications) et classements 5 jours.
+ */
+export async function pruneStorage(db: MatchScoresDB, { rawDays = 3, maxRaw = 3000, cycleDays = 7, matchDays = 5 } = {}) {
   const before = (days: number) => new Date(Date.now() - days * 86400_000).toISOString();
   await db.raw_captures.where("captured_at").below(before(rawDays)).delete();
   const excess = (await db.raw_captures.count()) - maxRaw;
   if (excess > 0) await db.raw_captures.bulkDelete(await db.raw_captures.orderBy("id").limit(excess).primaryKeys());
   await db.cycles.where("started_at").below(before(cycleDays)).delete();
+  const old = await db.matches.where("updated_at").below(before(matchDays)).primaryKeys();
+  if (old.length) {
+    await db.transaction("rw", [db.matches, db.odds, db.aliases, db.checks], async () => {
+      const removed = new Set(old);
+      await db.odds.where("match_key").anyOf(old).delete();
+      await db.checks.where("match_key").anyOf(old).delete();
+      await db.aliases.filter((a) => removed.has(a.key)).delete();
+      await db.matches.bulkDelete(old);
+    });
+  }
+  await db.standings.where("captured_at").below(before(matchDays)).delete();
 }
 
 /** Efface tout ce qui a été collecté (captures, matchs, cotes, classements, journal, vérifications) ; sources et réglages sont gardés. */

@@ -48,11 +48,16 @@ export interface RawCapture {
 
 export type MatchStatus = "scheduled" | "live" | "finished";
 
+/** Football virtuel (tiré au sort par le site) ou match réel. */
+export type Category = "virtual" | "real";
+
 /** Table matches — unique (source_id, external_id). */
 export interface MatchRow {
   key: string;
   source_id: string;
   external_id: string;
+  /** Virtuel ou réel, d'après la page où le match a été vu (voir core/category.ts). */
+  category?: Category;
   league?: string;
   season?: string;
   round?: number;
@@ -66,8 +71,6 @@ export interface MatchRow {
   away_score?: number;
   first_seen_at: string;
   updated_at: string;
-  /** Première capture où le match est terminé. */
-  finished_at?: string;
   /** Méthodes ayant vu ce match (pour le score de complétude par méthode). */
   methods: Method[];
   /** Méthode qui a fourni le score final. */
@@ -91,6 +94,7 @@ export interface OddsRow {
 export interface StandingRow {
   key: string;
   source_id: string;
+  category?: Category;
   league: string;
   season: string;
   round: number;

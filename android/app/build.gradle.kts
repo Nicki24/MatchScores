@@ -15,7 +15,7 @@ android {
         targetSdk = 35
         // > versions de la première appli (1 à 3) : s'installe par-dessus
         versionCode = 100 + ciVersionCode
-        versionName = "2.0.$ciVersionCode"
+        versionName = "2.1.$ciVersionCode"
     }
 
     // Même clé que la première version de l'appli : la mise à jour s'installe sans désinstaller.

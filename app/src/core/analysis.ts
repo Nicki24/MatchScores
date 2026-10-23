@@ -2,6 +2,7 @@
  * Statistiques descriptives (cahier des charges, section 7) : les matchs virtuels
  * sont tirés au sort ; on décrit les cotes et l'historique, on ne prédit rien.
  */
+import { isStandardSelection } from "./normalize/markets";
 import { teamKey } from "./normalize/util";
 import type { MatchRow, OddsRow } from "./types";
 
@@ -32,10 +33,13 @@ export interface MarketOdds {
 const MARKET_ORDER = ["1X2", "12", "DC", "OU0.5", "OU1.5", "OU2.5", "OU3.5", "OU4.5", "OU5.5", "BTTS", "CS"];
 const SELECTION_ORDER = ["1", "X", "2", "1X", "12", "X2", "Over", "Under", "Oui", "Non"];
 
-/** Dernières cotes de chaque marché, avec leur historique de changements. */
+/**
+ * Dernières cotes de chaque marché, avec leur historique de changements. Les issues étrangères
+ * à un marché (1/1, 1/X… rangées dans le 1X2 par une version précédente) sont ignorées.
+ */
 export function marketsOf(rows: OddsRow[]): MarketOdds[] {
   const byMarket = new Map<string, Map<string, OddsPoint[]>>();
-  for (const r of [...rows].sort((a, b) => a.captured_at.localeCompare(b.captured_at))) {
+  for (const r of [...rows].filter((x) => isStandardSelection(x.market, x.selection)).sort((a, b) => a.captured_at.localeCompare(b.captured_at))) {
     const m = byMarket.get(r.market) ?? new Map<string, OddsPoint[]>();
     const h = m.get(r.selection) ?? [];
     if (h.length === 0 || h[h.length - 1].value !== r.value) h.push({ value: r.value, at: r.captured_at });
@@ -76,7 +80,7 @@ export function marketLabel(market: string): string {
 
 export function selectionLabel(market: string, selection: string, m: Pick<MatchRow, "home_team" | "away_team">): string {
   if (market === "1X2" || market === "12") return selection === "1" ? m.home_team : selection === "2" ? m.away_team : "Nul";
-  if (market === "DC") return selection === "1X" ? `${m.home_team} ou nul` : selection === "X2" ? `${m.away_team} ou nul` : "Pas de nul";
+  if (market === "DC") return selection === "1X" ? `${m.home_team} ou nul` : selection === "X2" ? `${m.away_team} ou nul` : "Pas de match nul";
   if (market.startsWith("OU")) return selection === "Over" ? "Plus" : "Moins";
   return selection;
 }
@@ -160,8 +164,11 @@ export interface TableRow {
  */
 export function computeTable(matches: MatchRow[], league?: string): TableRow[] {
   let games = finishedOnly(matches).filter((m) => !league || m.league === league);
-  games.sort((a, b) => a.first_seen_at.localeCompare(b.first_seen_at));
-  // Nouvelle saison virtuelle quand la journée repart de zéro
+  // Saison en cours : la plus récente quand le site l'indique…
+  const latest = games.reduce<MatchRow | undefined>((a, m) => (!a || m.updated_at > a.updated_at ? m : a), undefined);
+  if (latest?.season) games = games.filter((m) => m.season === latest.season);
+  games.sort((a, b) => (a.kickoff_at ?? a.first_seen_at).localeCompare(b.kickoff_at ?? b.first_seen_at));
+  // …sinon, nouvelle saison virtuelle quand la journée repart de zéro
   let start = 0;
   for (let i = 1; i < games.length; i++) {
     const prev = games[i - 1].round;
@@ -215,6 +222,13 @@ export function computeTable(matches: MatchRow[], league?: string): TableRow[] {
     r.form = r.form.slice(-5);
   });
   return list;
+}
+
+/** Ligue principale d'une liste de matchs : celle qui en compte le plus. */
+export function mainLeague(matches: Pick<MatchRow, "league">[]): string | undefined {
+  const counts = new Map<string, number>();
+  for (const m of matches) if (m.league) counts.set(m.league, (counts.get(m.league) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
 }
 
 export const pct = (p: number) => `${Math.round(p * 100)} %`;
