@@ -4,6 +4,7 @@
  * et les classements, sans dépendre des noms de champs exacts du site.
  */
 import { emptyBatch, type MatchInput, type MatchStatus, type NormalizedBatch, type OddsInput, type StandingInput } from "../types";
+import { competitionOf } from "./competition";
 import {
   classifyMarket,
   isComplete,
@@ -133,10 +134,15 @@ function teamsOf(obj: Obj): [string, string] | undefined {
   if (typeof name === "string") {
     // « Arsenal - Chelsea », mais pas « 1st Half - 1X2 » ni « 1ère mi-temps - Résultat » (un nom de marché)
     const m = name.match(/^(.{2,50}?)\s+(?:-|–|vs\.?|v)\s+(.{2,50})$/i);
-    if (m && !/\d+[.,]\d+$/.test(m[2]) && !looksLikeMarket(m[1]) && !looksLikeMarket(m[2])) return [cleanName(m[1]), cleanName(m[2])];
+    // Ni « Suède - D1 Suède » (une compétition : sans heure de coup d'envoi, ou avec ses matchs dedans)
+    const competition = competitionOf(name) && (pick(obj, TIME_KEYS) == null || listsEvents(obj));
+    if (m && !competition && !/\d+[.,]\d+$/.test(m[2]) && !looksLikeMarket(m[1]) && !looksLikeMarket(m[2])) return [cleanName(m[1]), cleanName(m[2])];
   }
   return undefined;
 }
+
+/** L'objet contient-il une liste de matchs (une compétition et ses rencontres) ? */
+const listsEvents = (obj: Obj) => Object.values(obj).some((v) => Array.isArray(v) && v.some((x) => isObj(x) && teamsOf(x) != null));
 
 function side(v: unknown): number {
   if (!isObj(v)) return 0;
@@ -479,7 +485,8 @@ export function normalizeJson(data: unknown, capturedAt = new Date().toISOString
     // Contexte transmis aux enfants : ligue, saison, journée
     const next: Ctx = { ...ctx };
     const lg = leagueOf(obj) ?? (/(league|tournament|competition)/i.test(parentKey) ? str(obj) : undefined);
-    if (lg) next.league = lg;
+    // « Suède - D1 Suède » : la compétition seule, comme dans le texte de la page
+    if (lg) next.league = competitionOf(lg)?.league ?? lg;
     const se = seasonOf(obj);
     if (se) next.season = se;
     const ro = roundOf(obj) ?? (/(round|matchday|week|journee)/i.test(parentKey) ? parseRound(pick(obj, ["number", "roundNumber", "id", "name", "index"])) : undefined);

@@ -3,6 +3,7 @@
  * (document.body.innerText) — matchs et cotes, journée, résultats, classement.
  */
 import { emptyBatch, type MatchInput, type NormalizedBatch, type StandingInput } from "../types";
+import { competitionOf } from "./competition";
 import { classifyMarket, outcome, words } from "./markets";
 import { cleanName, hash, ODDS_RE, parseOdds, parseTime } from "./util";
 
@@ -40,6 +41,8 @@ function headerKind(line: string): "1x2" | "side" {
   return market === "1X2" ? "1x2" : "side";
 }
 const TIME_RE = /^(\d{1,2})[:h](\d{2})$/;
+/** Score dans une ligne (« Leeds 2 - 1 Burnley », « EN DIRECT 2 - 0 », « 20:30 ») ; pas « Côme 1907 - Sassuolo » ni « Schalke 04 - 1. FC Köln ». */
+const SCORE_IN_LINE = /(?:^|\s)\d{1,2}\s*[-:–]\s*\d{1,2}(?![\d.])/;
 const RESULT_RE = /^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 .'&-]{1,40}?)\s+(\d{1,2})\s*[-:–]\s*(\d{1,2})\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 .'&-]{1,40})$/;
 const STANDING_RE =
   /^(\d{1,2})[.)]?\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 .'&-]{1,40}?)\s+((?:[+-]?\d{1,3}(?::\d{1,3})?\s+){2,9}[+-]?\d{1,3}(?::\d{1,3})?)(?:\s+([VNDPWL]{1,10}))?$/i;
@@ -56,7 +59,7 @@ function isName(line: string) {
     !OUTCOME.test(line) &&
     !isMarketLine(line) &&
     !LIVE_MARK.test(line) &&
-    !/\d\s*[-:–]\s*\d/.test(line) &&
+    !SCORE_IN_LINE.test(line) &&
     !RESULT_RE.test(line) &&
     !/^[VNDPWL]{3,10}$/.test(line)
   );
@@ -64,7 +67,7 @@ function isName(line: string) {
 
 function splitTeams(line: string): [string, string] | undefined {
   const m = line.match(/^(.{2,40}?)\s+(?:-|–|vs\.?|v)\s+(.{2,40})$/i);
-  if (!m || /\d\s*$/.test(m[1]) || /^\s*\d/.test(m[2])) return undefined;
+  if (!m || SCORE_IN_LINE.test(line)) return undefined;
   return [cleanName(m[1]), cleanName(m[2])];
 }
 
@@ -232,7 +235,11 @@ function parseMatches(text: string, reference: Date, layout: Layout) {
     const adjacent = headers.length && headers[headers.length - 1].at === firstAt - 1 ? headers[headers.length - 1].kind : undefined;
 
     let teams: [string, string] | undefined;
-    const last = names[names.length - 1];
+    // « Pays - Compétition » (sous les équipes sur bet261, ou en en-tête de liste) : la compétition du match, pas
+    // ses équipes — sauf si aucun autre nom ne les donne
+    const competition = names.filter((n) => competitionOf(n)).pop();
+    const own = competition && names.some((n) => !competitionOf(n)) ? names.filter((n) => !competitionOf(n)) : names;
+    const last = own[own.length - 1];
     if (last && splitTeams(last)) teams = splitTeams(last);
     else if (layout === "split") {
       const next = toks[j];
@@ -240,7 +247,7 @@ function parseMatches(text: string, reference: Date, layout: Layout) {
         teams = [last, cleanName(next.text)];
         i = j;
       }
-    } else if (names.length >= 2) teams = [names[names.length - 2], names[names.length - 1]];
+    } else if (own.length >= 2) teams = [own[own.length - 2], own[own.length - 1]];
     if (!teams || items.length < 2) continue;
 
     // Onglet annexe choisi pour la liste (Mi-temps, Double chance…) : le match est lu, pas ses cotes
@@ -249,6 +256,7 @@ function parseMatches(text: string, reference: Date, layout: Layout) {
     const main = listSide ? undefined : mainOdds(items, teams, { block: group, skipFirst: adjacent === "side" });
     // Section annexe d'un match (« Mi-temps » 1 X 2) sans le résultat : on attend la suite de cotes suivante
     if (!main && !listSide && layout === "before") continue;
+    if (competition && own !== names) league = competitionOf(competition)!.league;
     const kickoff = time ? parseTime(time, reference) : undefined;
     const fuzzy = round == null && !kickoff;
     const externalId = domId(round, kickoff, teams[0], teams[1]);

@@ -119,3 +119,107 @@ describe("résultats lus dans le texte", () => {
     expect(r.map((m) => `${m.home_team} ${m.home_score}-${m.away_score} ${m.away_team}`)).toEqual(["Leeds 2-1 Burnley", "Wolves 0-0 Crystal", "Brighton 3-1 Leicester"]);
   });
 });
+
+describe("page bet261 : pays et compétition sous les équipes", () => {
+  const at = new Date(Date.UTC(2026, 9, 24, 4, 41)).toISOString();
+  const read = (lines: string[]) =>
+    normalizeText(lines.join("\n"), at).matches.filter((m) => m.status === "scheduled").map((m) => `${m.home_team} | ${m.away_team} | ${m.league ?? ""}`);
+  const oddsOf = (lines: string[]) => normalizeText(lines.join("\n"), at).odds.map((o) => `${o.selection}:${o.value}`).join(" ");
+  // Cartes « Top paris » : équipes, heure, « Pays - Compétition », LIVE, jour, cotes, nombre de paris
+  const card = (teams: string, time: string, competition: string, odds: [string, string, string], live = true) => [
+    teams,
+    time,
+    competition,
+    ...(live ? ["LIVE"] : []),
+    "Aujourd'hui",
+    "1",
+    odds[0],
+    "X",
+    odds[1],
+    "2",
+    odds[2],
+    "+162",
+  ];
+  const TOP = [
+    ...card("IK Sirius FK - AIK Solna", "16:00", "Suède - D1 Suède", ["1,50", "4,44", "4,83"]),
+    ...card("Cagliari Calcio - Bologne FC", "16:00", "Italie - Serie A", ["2,76", "2,94", "2,51"]),
+    ...card("Côme 1907 - Sassuolo", "16:00", "Italie - Serie A", ["1,41", "4,86", "5,47"]),
+    ...card("Modena FC - Cesena FC", "16:00", "Italie - Serie B", ["1,47", "4,17", "5,61"], false),
+    ...card("RB Leipzig - SV 07 Elversberg", "16:30", "Allemagne - Bundesliga", ["1,35", "5,34", "5,74"]),
+    ...card("SC Paderborn - Hambourg SV", "16:30", "Allemagne - Bundesliga", ["2,18", "3,50", "2,82"]),
+  ];
+  const EXPECTED = [
+    "IK Sirius FK | AIK Solna | D1 Suède",
+    "Cagliari Calcio | Bologne FC | Serie A",
+    "Côme 1907 | Sassuolo | Serie A",
+    "Modena FC | Cesena FC | Serie B",
+    "RB Leipzig | SV 07 Elversberg | Bundesliga",
+    "SC Paderborn | Hambourg SV | Bundesliga",
+  ];
+
+  it("lit les vrais noms des équipes, pas le pays et la compétition", () => {
+    expect(read(TOP)).toEqual(EXPECTED);
+    expect(oddsOf(TOP.slice(0, 12))).toBe("1:1.5 X:4.44 2:4.83");
+  });
+
+  it("quel que soit l'ordre de l'heure et de la compétition dans la carte", () => {
+    const swapped = TOP.map((l, i) => (/^\d\d:\d\d$/.test(l) ? TOP[i + 1] : /^\d\d:\d\d$/.test(TOP[i - 1] ?? "") ? TOP[i - 1] : l));
+    expect(read(swapped)).toEqual(EXPECTED);
+  });
+
+  it("compétition en en-tête de liste, matchs de sélections nationales et noms avec des chiffres", () => {
+    const page = [
+      "Suède - Allsvenskan",
+      "16:00",
+      "Malmö FF - Hammarby IF",
+      "1.50 4.44 4.83",
+      "International - Matchs amicaux",
+      "18:00",
+      "Suède - Norvège",
+      "2.10 3.20 3.60",
+      "Allemagne - Bundesliga",
+      "15:30",
+      "FC Schalke 04 - 1. FC Köln",
+      "2.40 3.40 2.90",
+      "Hannover 96 - Mainz 05",
+      "2.20 3.30 3.10",
+    ];
+    expect(read(page)).toEqual([
+      "Malmö FF | Hammarby IF | Allsvenskan",
+      "Suède | Norvège | Matchs amicaux",
+      "FC Schalke 04 | 1. FC Köln | Bundesliga",
+      "Hannover 96 | Mainz 05 | Bundesliga",
+    ]);
+  });
+
+  it("une ligne « Pays - Club » seule devant les cotes reste un match (amical d'une sélection)", () => {
+    expect(read(["18:00", "Madagascar - CNaPS Sport", "1.80 3.30 4.10"])).toEqual(["Madagascar | CNaPS Sport | "]);
+  });
+
+  it("un score n'est toujours pas un nom d'équipe", () => {
+    const page = ["Résultats — Journée 6", "Leeds 2 - 1 Burnley", "Journée 7", "07:56", "Sheffield - Leeds", "1.66 3.50 4.20"];
+    const b = normalizeText(page.join("\n"), at);
+    expect(b.matches.map((m) => `${m.home_team}|${m.away_team}|${m.status}`)).toEqual(["Sheffield|Leeds|scheduled", "Leeds|Burnley|finished"]);
+  });
+
+  it("données du site : une compétition « Pays - Compétition » n'est pas un match", () => {
+    const tournament = {
+      id: "sr:tournament:1",
+      name: "Suède - D1 Suède",
+      events: [
+        {
+          eventId: "sr:match:9",
+          homeTeamName: "IK Sirius FK",
+          awayTeamName: "AIK Solna",
+          estimateStartTime: Date.parse(at) + 3600_000,
+          markets: [{ id: "1", desc: "1X2", outcomes: [{ id: "1", odds: "1.50" }, { id: "2", odds: "4.44" }, { id: "3", odds: "4.83" }] }],
+        },
+      ],
+    };
+    const b = normalizeJson({ tournaments: [tournament] }, at);
+    expect(b.matches.map((m) => `${m.home_team} | ${m.away_team}`)).toEqual(["IK Sirius FK | AIK Solna"]);
+    expect(b.odds.map((o) => `${o.selection}:${o.value}`)).toEqual(["1:1.5", "X:4.44", "2:4.83"]);
+    // Un vrai match nommé « A - B » reste lu
+    expect(normalizeJson({ id: 7, name: "Suède - Norvège", startTime: Date.parse(at) + 3600_000 }, at).matches.map((m) => m.away_team)).toEqual(["Norvège"]);
+  });
+});

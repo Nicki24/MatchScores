@@ -256,6 +256,17 @@ describe("mise à jour de l'appli", () => {
     expect(marketsOf(await db.odds.where("match_key").equals(key).toArray())[0].selections.map((x) => x.value)).toEqual(s.matches[0].odds["1X2"]);
   });
 
+  it("la relecture après mise à jour corrige les noms « Pays - Compétition » déjà enregistrés", async () => {
+    const t = Date.UTC(2026, 9, 24, 4, 41);
+    const page = ["IK Sirius FK - AIK Solna", "16:00", "Suède - D1 Suède", "LIVE", "Aujourd'hui", "1", "1,50", "X", "4,44", "2", "4,83", "+162"].join("\n");
+    await capture("dom", page, t, "https://bet261.mg/");
+    // Ce que l'ancienne lecture avait enregistré pour cette page
+    await db.matches.clear();
+    await applyBatch(db, "bet261", { matches: [{ external_id: "old", home_team: "Suède", away_team: "D1 Suède", status: "scheduled" }], odds: [], standings: [] }, "D", at(t));
+    await refreshStoredData(db);
+    expect((await db.matches.toArray()).map((m) => `${m.home_team} | ${m.away_team} | ${m.league}`)).toEqual(["IK Sirius FK | AIK Solna | D1 Suède"]);
+  });
+
   it("efface les données collectées en gardant les sources et les réglages", async () => {
     const now = T0 + (5 * 120 + 30) * 1000;
     await capture("xhr", JSON.stringify(apiRound(league.state(now))), now);
