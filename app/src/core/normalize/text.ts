@@ -3,7 +3,7 @@
  * (document.body.innerText) — matchs et cotes, journée, résultats, classement.
  */
 import { emptyBatch, type MatchInput, type NormalizedBatch, type StandingInput } from "../types";
-import { competitionOf } from "./competition";
+import { competitionOf, isRegion } from "./competition";
 import { classifyMarket, outcome, words } from "./markets";
 import { cleanName, hash, ODDS_RE, parseOdds, parseTime } from "./util";
 
@@ -41,6 +41,8 @@ function headerKind(line: string): "1x2" | "side" {
   return market === "1X2" ? "1x2" : "side";
 }
 const TIME_RE = /^(\d{1,2})[:h](\d{2})$/;
+/** Séparateur affiché seul entre deux morceaux d'une ligne (« Finlande » / « - » / « D1 Finlande »). */
+const SEPARATOR = /^[-–·/|›>]$/;
 /** Score dans une ligne (« Leeds 2 - 1 Burnley », « EN DIRECT 2 - 0 », « 20:30 ») ; pas « Côme 1907 - Sassuolo » ni « Schalke 04 - 1. FC Köln ». */
 const SCORE_IN_LINE = /(?:^|\s)\d{1,2}\s*[-:–]\s*\d{1,2}(?![\d.])/;
 const RESULT_RE = /^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 .'&-]{1,40}?)\s+(\d{1,2})\s*[-:–]\s*(\d{1,2})\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 .'&-]{1,40})$/;
@@ -50,7 +52,8 @@ const STANDING_RE =
 function isName(line: string) {
   return (
     line.length >= 2 &&
-    line.length <= 50 &&
+    // « Wolverhampton Wanderers FC - Brighton & Hove Albion FC » : une ligne « A - B » peut être plus longue
+    (line.length <= 50 || (line.length <= 90 && !!splitTeams(line))) &&
     /[a-zà-ÿ]{2,}/i.test(line) &&
     !NOISE.test(line) &&
     !ODDS_RE.test(line) &&
@@ -170,6 +173,8 @@ function parseMatches(text: string, reference: Date, layout: Layout) {
   let listHeader: "1x2" | "side" | undefined;
   /** Matchs lus depuis le début de la liste (journée, ligue) : un en-tête placé après eux est celui d'une section. */
   let emitted = 0;
+  /** Position du dernier nom retenu. */
+  let lastNameAt = -1;
 
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i];
@@ -179,6 +184,23 @@ function parseMatches(text: string, reference: Date, layout: Layout) {
         names = [];
         listHeader = undefined;
         emitted = 0;
+        continue;
+      }
+      // Pays et compétition affichés en morceaux (« Finlande » / « - » / « D1 Finlande », « Allemagne » / « Bundesliga 2 ») :
+      // recollés en une ligne « Pays - Compétition », sinon ils passeraient pour les deux équipes du match
+      const prevName = names[names.length - 1];
+      const gap = i - lastNameAt;
+      const piece = cleanName(t.text);
+      if (
+        prevName &&
+        isRegion(prevName) &&
+        (gap === 1 || (gap === 2 && SEPARATOR.test(toks[i - 1].text))) &&
+        !splitTeams(t.text) &&
+        isName(t.text) &&
+        competitionOf(`${prevName} - ${piece}`)
+      ) {
+        names[names.length - 1] = `${prevName} - ${piece}`;
+        lastNameAt = i;
         continue;
       }
       if (LEAGUE_HINT.test(t.text) && t.text.length <= 40 && !splitTeams(t.text) && !isMarketLine(t.text)) {
@@ -205,6 +227,7 @@ function parseMatches(text: string, reference: Date, layout: Layout) {
       }
       if (!label && isName(t.text)) {
         names.push(cleanName(t.text));
+        lastNameAt = i;
         if (names.length > 4) names.shift();
       }
       continue;

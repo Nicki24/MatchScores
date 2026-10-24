@@ -192,6 +192,36 @@ describe("page bet261 : pays et compétition sous les équipes", () => {
     ]);
   });
 
+  // Sur le téléphone, le pays, le tiret et la compétition (parfois aussi les équipes) arrivent en morceaux séparés
+  const pieces = (teams: string, competition: string, sep: string[]) => (l: string) =>
+    l === teams || l === competition ? l.split(" - ").flatMap((x, k) => (k ? [...sep, x] : [x])) : [l];
+  it.each([
+    ["pays / - / compétition", false, ["-"]],
+    ["pays / compétition, sans tiret", false, []],
+    ["équipes et compétition en morceaux", true, ["-"]],
+  ])("lit les vrais noms quand la carte est en morceaux : %s", (_, splitTeams, sep) => {
+    const cards = [
+      card("Hertha BSC - Schalke 04", "14:00", "Allemagne - Bundesliga 2", ["2,10", "3,40", "3,30"]),
+      card("HJK - KuPS", "14:00", "Finlande - D1 Finlande", ["5,20", "3,90", "1,55"]),
+      card("Aston Villa - Manchester City FC", "14:30", "Angleterre - Premier League", ["4,60", "4,10", "1,53"]),
+      card("IK Sirius FK - AIK Solna", "16:00", "Suède - D1 Suède", ["1,50", "4,44", "4,83"]),
+    ];
+    const page = cards.flatMap((c) => c.flatMap(pieces(splitTeams ? c[0] : "", c[2], sep as string[])));
+    expect(read(page)).toEqual([
+      "Hertha BSC | Schalke 04 | Bundesliga 2",
+      "HJK | KuPS | D1 Finlande",
+      "Aston Villa | Manchester City FC | Premier League",
+      "IK Sirius FK | AIK Solna | D1 Suède",
+    ]);
+    expect(oddsOf(page.slice(0, page.indexOf("+162") + 1))).toBe("1:2.1 X:3.4 2:3.3");
+  });
+
+  it("noms d'équipes très longs", () => {
+    expect(read(card("Wolverhampton Wanderers FC - Brighton & Hove Albion FC", "17:00", "Angleterre - Premier League", ["2,90", "3,30", "2,45"]))).toEqual([
+      "Wolverhampton Wanderers FC | Brighton & Hove Albion FC | Premier League",
+    ]);
+  });
+
   it("une ligne « Pays - Club » seule devant les cotes reste un match (amical d'une sélection)", () => {
     expect(read(["18:00", "Madagascar - CNaPS Sport", "1.80 3.30 4.10"])).toEqual(["Madagascar | CNaPS Sport | "]);
   });

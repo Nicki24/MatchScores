@@ -134,15 +134,11 @@ function teamsOf(obj: Obj): [string, string] | undefined {
   if (typeof name === "string") {
     // « Arsenal - Chelsea », mais pas « 1st Half - 1X2 » ni « 1ère mi-temps - Résultat » (un nom de marché)
     const m = name.match(/^(.{2,50}?)\s+(?:-|–|vs\.?|v)\s+(.{2,50})$/i);
-    // Ni « Suède - D1 Suède » (une compétition : sans heure de coup d'envoi, ou avec ses matchs dedans)
-    const competition = competitionOf(name) && (pick(obj, TIME_KEYS) == null || listsEvents(obj));
-    if (m && !competition && !/\d+[.,]\d+$/.test(m[2]) && !looksLikeMarket(m[1]) && !looksLikeMarket(m[2])) return [cleanName(m[1]), cleanName(m[2])];
+    // Ni « Suède - D1 Suède » (une compétition)
+    if (m && !competitionOf(name) && !/\d+[.,]\d+$/.test(m[2]) && !looksLikeMarket(m[1]) && !looksLikeMarket(m[2])) return [cleanName(m[1]), cleanName(m[2])];
   }
   return undefined;
 }
-
-/** L'objet contient-il une liste de matchs (une compétition et ses rencontres) ? */
-const listsEvents = (obj: Obj) => Object.values(obj).some((v) => Array.isArray(v) && v.some((x) => isObj(x) && teamsOf(x) != null));
 
 function side(v: unknown): number {
   if (!isObj(v)) return 0;
